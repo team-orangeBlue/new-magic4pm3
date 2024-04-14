@@ -460,6 +460,119 @@ static int CmdHFMFPInfo(const char *Cmd) {
     return PM3_SUCCESS;
 }
 
+static int CmdFudanInit(const char *Cmd){
+    CLIParserContext *ctx;
+    CLIParserInit(&ctx, "hf mfp fudanprep",
+                  "Prepares FMCOS chips for use with troika app. VOS use only.\n",
+                  "hf mfp fudanprep\n"
+                 );
+
+    void *argtable[] = {
+        arg_param_begin,
+        arg_lit0("v",  "verbose", "Verbose mode"),
+        arg_param_end
+    };
+    CLIExecWithReturn(ctx, Cmd, argtable, true);
+    bool verbose = arg_get_lit(ctx, 1);
+    CLIParserFree(ctx);
+
+    mfpSetVerboseMode(verbose);
+    // Step 0: calculate card data
+    SendCommandMIX(CMD_HF_ISO14443A_READER, ISO14A_CONNECT, 0, 0, NULL, 0);
+    PacketResponseNG resp;
+    WaitForResponse(CMD_ACK, &resp);
+
+    iso14a_card_select_t card;
+    memcpy(&card, (iso14a_card_select_t *)resp.data.asBytes, sizeof(iso14a_card_select_t));
+    PrintAndLogEx(INFO, sprint_hex(card.uid, 4));
+
+    FudanPrepare(card.uid);
+    PrintAndLogEx(INFO, "Card initialized ( " _GREEN_("ok") " )");
+    return PM3_SUCCESS;
+}
+
+static int CmdFudanCharge(const char *Cmd) {
+    CLIParserContext *ctx;
+    CLIParserInit(&ctx, "hf mfp charge",
+                  "Executes charge on FMCOS chip with troika app. VOS use only.\n",
+                  "hf mfp charge\n"
+                 );
+
+    void *argtable[] = {
+        arg_param_begin,
+        arg_lit0("v",  "verbose", "Verbose mode"),
+        arg_param_end
+    };
+    CLIExecWithReturn(ctx, Cmd, argtable, true);
+    bool verbose = arg_get_lit(ctx, 1);
+    CLIParserFree(ctx);
+
+    mfpSetVerboseMode(verbose);
+    // Step 0: calculate card data
+    SendCommandMIX(CMD_HF_ISO14443A_READER, ISO14A_CONNECT, 0, 0, NULL, 0);
+    PacketResponseNG resp;
+    WaitForResponse(CMD_ACK, &resp);
+
+    iso14a_card_select_t card;
+    memcpy(&card, (iso14a_card_select_t *)resp.data.asBytes, sizeof(iso14a_card_select_t));
+    PrintAndLogEx(INFO, sprint_hex(card.uid, 4));
+    uint8_t data[250] = {0};
+    int datalen = 0;
+    int res = FudanCharge(card.uid, data, sizeof(data), &datalen);
+    if (res) {
+        PrintAndLogEx(ERR, "Exchange error: %02x", res);
+        return res;
+    }
+    PrintAndLogEx(INFO, "Charged 54 rubles ( " _GREEN_("ok") " )");
+    return PM3_SUCCESS;
+}
+
+static int CmdFudanReCharge(const char *Cmd) {
+    CLIParserContext *ctx;
+    CLIParserInit(&ctx, "hf mfp recharge",
+                  "Executes reload on fmcos chip with troika app. VOS use only.\n",
+                  "hf mfp recharge\n"
+                 );
+
+    void *argtable[] = {
+        arg_param_begin,
+        arg_lit0("v",  "verbose", "Verbose mode"),
+        arg_int1("b", "bal", "0-65535", "Refill value"),
+        //arg_str0("d",  "date", "<hex>", "Date, 4 hex bytes"),
+        arg_param_end
+    };
+    CLIExecWithReturn(ctx, Cmd, argtable, true);
+    bool verbose = arg_get_lit(ctx, 1);
+    uint32_t argvalue = arg_get_int(ctx, 2);
+    //int datelen = 0;
+    //CLIGetHexWithReturn(ctx, 3, date, &datelen);
+    CLIParserFree(ctx);
+    //uint8_t nothing[4] = {0};
+    //if (datelen == 0){memmove(date, nothing, 4);}
+    mfpSetVerboseMode(verbose);
+    // Step 0: calculate card data
+    SendCommandMIX(CMD_HF_ISO14443A_READER, ISO14A_CONNECT, 0, 0, NULL, 0);
+    PacketResponseNG resp;
+    WaitForResponse(CMD_ACK, &resp);
+
+    iso14a_card_select_t card;
+    memcpy(&card, (iso14a_card_select_t *)resp.data.asBytes, sizeof(iso14a_card_select_t));
+    PrintAndLogEx(INFO, sprint_hex(card.uid, 4));
+    uint8_t data[250] = {0};
+    int datalen = 0;
+    uint8_t value[2] = {0};
+    value[0] = argvalue >> 8;
+    value[1] = argvalue & 0xFF;
+
+    int res = FudanReCharge(card.uid, value, data, sizeof(data), &datalen);
+    if (res) {
+        PrintAndLogEx(ERR, "Exchange error: %02x", res);
+        return res;
+    }
+    PrintAndLogEx(INFO, "Reloaded ( " _GREEN_("ok") " )");
+    return PM3_SUCCESS;
+}
+
 static int CmdHFMFPWritePerso(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf mfp wrp",
@@ -2094,6 +2207,9 @@ static int CmdHFMFPList(const char *Cmd) {
 static command_t CommandTable[] = {
     {"help",        CmdHelp,                 AlwaysAvailable, "This help"},
     {"list",        CmdHFMFPList,            AlwaysAvailable, "List MIFARE Plus history"},
+    {"fudanprep",   CmdFudanInit,            IfPm3Iso14443a,  "Prepare fudan 1208 IC"},
+    {"charge",      CmdFudanCharge,          IfPm3Iso14443a,  "Charge fudan 1208 IC"},
+    {"recharge",    CmdFudanReCharge,        IfPm3Iso14443a,  "Recharge fudan 1208 IC"},
     {"-----------", CmdHelp,                 IfPm3Iso14443a,  "------------------- " _CYAN_("operations") " ---------------------"},
     {"auth",        CmdHFMFPAuth,            IfPm3Iso14443a,  "Authentication"},
     {"chk",         CmdHFMFPChk,             IfPm3Iso14443a,  "Check keys"},
