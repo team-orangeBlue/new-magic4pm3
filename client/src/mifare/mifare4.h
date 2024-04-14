@@ -61,6 +61,10 @@ const char *mfpGetErrorDescription(uint8_t errorCode);
 int CalculateMAC(mf4Session_t *mf4session, MACType_t mtype, uint8_t blockNum, uint8_t blockCount, uint8_t *data, int datalen, uint8_t *mac, bool verbose);
 int MifareAuth4(mf4Session_t *mf4session, uint8_t *keyn, uint8_t *key, bool activateField, bool leaveSignalON, bool dropFieldIfError, bool verbose, bool silentMode);
 
+int FudanKDF(uint8_t *UID, uint16_t keytype, uint8_t *dataout);
+int FudanPrepare(uint8_t* uid);
+int FudanCharge(uint8_t *uid, uint8_t *dataout, int maxdataoutlen, int *dataoutlen);
+int FudanReCharge(uint8_t *uid, uint8_t *value, uint8_t *dataout, int maxdataoutlen, int *dataoutlen);
 int MFPWritePerso(uint8_t *keyNum, uint8_t *key, bool activateField, bool leaveSignalON, uint8_t *dataout, int maxdataoutlen, int *dataoutlen);
 int MFPCommitPerso(bool activateField, bool leaveSignalON, uint8_t *dataout, int maxdataoutlen, int *dataoutlen);
 int MFPReadBlock(mf4Session_t *mf4session, bool plain, bool maccmd, bool macres, uint8_t blockNum, uint8_t blockCount, bool activateField, bool leaveSignalON, uint8_t *dataout, int maxdataoutlen, int *dataoutlen, uint8_t *mac);
