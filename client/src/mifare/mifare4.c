@@ -297,8 +297,8 @@ int FudanPrepare(uint8_t* uid){
     uint8_t buffer[250] = {0}; // Garbage zone, maybe there is a better way
     int garbage = 20;
     uint8_t cmdwipe[5] = {0x80, 0x0e, 0}; // Step 1: wipe tag
-    uint8_t cmdmakeapp[19] = {0x80, 0xe0, 0, 1, 14, 0x38, 0x4, 0x00, 0xf0, 0xf0, 0x81, 0xff, 0xff, 0x54, 0x52, 0x4f, 0x49, 0x4b, 0x41}; // Step 2: Make the new application
-    uint8_t cmdsel[11]={0, 0xa4, 4, 0, 6, 0x54, 0x52, 0x4f, 0x49, 0x4b, 0x41}; // We'll make use of this a lot
+    uint8_t cmdmakeapp[19] = {0x80, 0xe0, 0, 1, 15, 0x38, 0x4, 0x00, 0xf0, 0xf0, 0x81, 0xff, 0xff, 0x48, 0x4F, 0x4D, 0x45, 0x41, 0x50, 0x50}; // Step 2: Make the new application
+    uint8_t cmdsel[11]={0, 0xa4, 4, 0, 7, 0x48, 0x4F, 0x4D, 0x45, 0x41, 0x50, 0x50}; // We'll make use of this a lot
     uint8_t cmdmakekey[12]={0x80, 0xE0, 0xFF, 0xFE, 0x07, 0x3F, 0x00, 0xB0, 0x81, 0xF0, 0xFF, 0xFF}; // Keyfile
     uint8_t cmdmakebin[12]={0x80, 0xE0, 0, 4, 0x07, 0x68, 0, 8, 0xF2, 0xF3, 0xFF, 0x7F}; // Config file
     uint8_t cmdmakerec[12]={0x80, 0xE0, 0, 3, 0x07, 0x2e, 0x0a, 23, 0xF2, 0xEF, 0xFF, 0x74}; // Records file
@@ -354,7 +354,7 @@ int FudanPrepare(uint8_t* uid){
     ExchangeRAW14a(cmdmakebin, sizeof(cmdmakebin), false, true, buffer, 250, &garbage, false); // make the binary file with the unlimited date, free uses and config
     ExchangeRAW14a(cmdmakerec, sizeof(cmdmakerec), false, true, buffer, 250, &garbage, false); // and the records file. Needed for logging
     // Step 5: make the wallet and call it a day
-    uint8_t cmdmakewallet[12] = {0x80, 0xe0, 0, 2, 7, 0x2f, 0x02, 0x08, 0xf0, 0, 0xff, 0x03};
+    uint8_t cmdmakewallet[12] = {0x80, 0xe0, 0, 1, 7, 0x2f, 0x02, 0x08, 0xf0, 0, 0xff, 0x03};
     ExchangeRAW14a(cmdmakewallet, sizeof(cmdmakewallet), false, false, buffer, 250, &garbage, false);
     return 0;
 }
@@ -368,13 +368,13 @@ int FudanCharge(uint8_t *uid, uint8_t *dataout, int maxdataoutlen, int *dataoutl
     FudanKDF(uid, 0x36, mackey);
     int garbage = 30;
     uint8_t buffer[250] = {0}; // Garbage zone, maybe there is a better way
-    uint8_t cmdsel[11] = {0x00, 0xa4, 0x04, 0x00, 0x06, 0x54, 0x52, 0x4F, 0x49, 0x4B, 0x41}; // Step 1: Select troika app
+    uint8_t cmdsel[11] = {0x00, 0xa4, 0x04, 0x00, 0x07, 0x48, 0x4F, 0x4D, 0x45, 0x41, 0x50, 0x50}; // Step 1: Select the access control app
     uint8_t getnt[5] = {0, 0x84, 0, 0, 4}; // Get challenge to authenticate
     uint8_t sendar[13] = {0, 0x82, 0, 2, 8, 0}; // Send response. Must be filled in place
     uint8_t ar[8] = {0};
     uint8_t cmdunlock[7] = {0x00, 0x20, 0x00, 0x00, 0x02, pincode[0], pincode[1]}; // Step 2: do PIN unlock so we can charge wallet
-    uint8_t cmdreadbal[5]={0x80, 0x5c, 0x00, 0x02, 0x04}; // Step 3: read balance so user knows what they altered
-    uint8_t cmdcharge1[17] = {0x80, 0x50, 0x01, 0x02, 0x0b, 0x02, 0x00, 0x00, 0x00, 0x36, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 15};
+    uint8_t cmdreadbal[5]={0x80, 0x5c, 0x00, 0x01, 0x04}; // Step 3: read balance so user knows what they altered
+    uint8_t cmdcharge1[17] = {0x80, 0x50, 0x01, 0x01, 0x0b, 0x02, 0x00, 0x00, 0x00, 0x1, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 15};
     ExchangeRAW14a(cmdsel, sizeof(cmdsel), true, true, buffer, 250, &garbage, false);
     if (buffer[0] != 0x6f){return 0xa4;}
     ExchangeRAW14a(cmdunlock, sizeof(cmdunlock), false, true, buffer, 250, &garbage, false);
@@ -409,7 +409,7 @@ int FudanCharge(uint8_t *uid, uint8_t *dataout, int maxdataoutlen, int *dataoutl
     uint8_t tempkey[8] = {buffer[11], buffer[12], buffer[13], buffer[14], buffer[4], buffer[5], 0x52, 0x4f};
     des3_encrypt(tempkey, tempkey, chargekey, 2);
     PrintAndLogEx(INFO, "Session key: %s", sprint_hex(tempkey, 8));
-    uint8_t mac1[24] = {0, 0, 0, 54, 6, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 7, 4, 0x20, 0x24, 0x22, 0x43, 0x15, 0x80, 0}; // Once again hardcoded values but can be changed if needed
+    uint8_t mac1[24] = {0, 0, 0, 1, 6, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 7, 4, 0x20, 0x24, 0x22, 0x43, 0x15, 0x80, 0}; // Once again hardcoded values but can be changed if needed
     uint8_t iv[8] = {0};
     des_encrypt_cbc(mac1, mac1, 24, tempkey, iv);
     // MAC1 has been made and is hopefully correct
@@ -419,7 +419,7 @@ int FudanCharge(uint8_t *uid, uint8_t *dataout, int maxdataoutlen, int *dataoutl
     ExchangeRAW14a(cmdcharge2, sizeof(cmdcharge2), false, true, buffer, 250, &garbage, false);
     if(buffer[8]!=0x90){return 0x54;}
     // Begin verifying MAC2
-    uint8_t mac2[8] = {0, 0, 0, 54, 0x80, 0};
+    uint8_t mac2[8] = {0, 0, 0, 1, 0x80, 0};
     uint8_t iv2[8] = {0};
     des_encrypt_cbc(mac2, mac2, 8, tempkey, iv2);
     uint8_t mac2r[4] = {0};
@@ -441,9 +441,9 @@ int FudanReCharge(uint8_t *uid, uint8_t *value, uint8_t *dataout, int maxdataout
     uint8_t buffer[250] = {0}; // Garbage zone, maybe there is a better way
     uint8_t cmdsel[11] = {0x00, 0xa4, 0x04, 0x00, 0x06, 0x54, 0x52, 0x4F, 0x49, 0x4B, 0x41}; // Step 1: Select troika app
     uint8_t cmdunlock[7] = {0x00, 0x20, 0x00, 0x00, 0x02, pincode[0], pincode[1]}; // Step 2: do PIN unlock so we can recharge wallet
-    uint8_t cmdreadbal[5]={0x80, 0x5c, 0x00, 0x02, 0x04}; // Step 3: read balance so user knows what they altered
-    uint8_t cmdcharge1[16] = {0x80, 0x50, 0x00, 0x02, 0x0b, 0x03, 0x00, 0x00, value[0], value[1], 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
-    uint8_t mac2data[24] = {0, 0, value[0], value[1], 2, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x05, 0x04, 0x20, 0x24, 0x17, 0x03, 0x15, 0x80, 0};
+    uint8_t cmdreadbal[5]={0x80, 0x5c, 0x00, 0x01, 0x04}; // Step 3: read balance so user knows what they altered
+    uint8_t cmdcharge1[16] = {0x80, 0x50, 0x00, 0x01, 0x0b, 0x03, 0x00, 0x00, value[0], value[1], 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+    uint8_t mac2data[24] = {0, 0, value[0], value[1], 1, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x05, 0x04, 0x20, 0x24, 0x17, 0x03, 0x15, 0x80, 0};
     uint8_t mac2result[24] = {0};
     uint8_t rechargekey[16] = {0};
     FudanKDF(uid, 0x033F, rechargekey);
@@ -496,7 +496,7 @@ int FudanReCharge(uint8_t *uid, uint8_t *value, uint8_t *dataout, int maxdataout
     des3_encrypt(tempkey, tempkey, rechargekey, 2);
     PrintAndLogEx(INFO, "Session key: %s", sprint_hex(tempkey, 8));
     // As we now have sesskey, we can now verify MAC1, which is composed of OLD BAL + REFILL VAL + TRANSACTION TYPE + READER ID and a padding 0x80
-    uint8_t mac1data[16] = {buffer[0], buffer[1], buffer[2], buffer[3], 0, 0, value[0], value[1], 2, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x80};
+    uint8_t mac1data[16] = {buffer[0], buffer[1], buffer[2], buffer[3], 0, 0, value[0], value[1], 1, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x80};
     uint8_t iv[8] = {0};
     des_encrypt_cbc(mac1data, mac1data, 16, tempkey, iv);
     uint8_t mac1r[4] = {0};
