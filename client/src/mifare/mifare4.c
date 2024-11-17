@@ -409,7 +409,7 @@ int FudanCharge(uint8_t *uid, uint8_t *dataout, int maxdataoutlen, int *dataoutl
     uint8_t tempkey[8] = {buffer[11], buffer[12], buffer[13], buffer[14], buffer[4], buffer[5], 0x52, 0x4f};
     des3_encrypt(tempkey, tempkey, chargekey, 2);
     PrintAndLogEx(INFO, "Session key: %s", sprint_hex(tempkey, 8));
-    uint8_t mac1[24] = {0, 0, 0, 1, 6, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 7, 4, 0x20, 0x24, 0x22, 0x43, 0x15, 0x80, 0}; // Once again hardcoded values but can be changed if needed
+    uint8_t mac1[24] = {0, 0, 0, 1, 5, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 7, 4, 0x20, 0x24, 0x22, 0x43, 0x15, 0x80, 0}; // Once again hardcoded values but can be changed if needed
     uint8_t iv[8] = {0};
     des_encrypt_cbc(mac1, mac1, 24, tempkey, iv);
     // MAC1 has been made and is hopefully correct
