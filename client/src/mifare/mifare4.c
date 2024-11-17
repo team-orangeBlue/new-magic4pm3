@@ -157,8 +157,8 @@ static int CalculateEncIVResponse(mf4Session *mf4session, uint8_t *iv, bool verb
 }
 */
 
-/* Here are all the functions required to operate FMCOS cards for basic transport card functionality.
-This includes wallet, unlimited rides, transaction logs, so on, so forth.
+/* Here are all the functions required to operate FMCOS cards for basic access control card functionality.
+This includes a counter, checksums, access logs, so on, so forth.
 For proper safety there's a KDF.
 VOS use only.
 */
@@ -297,8 +297,8 @@ int FudanPrepare(uint8_t* uid){
     uint8_t buffer[250] = {0}; // Garbage zone, maybe there is a better way
     int garbage = 20;
     uint8_t cmdwipe[5] = {0x80, 0x0e, 0}; // Step 1: wipe tag
-    uint8_t cmdmakeapp[19] = {0x80, 0xe0, 0, 1, 15, 0x38, 0x4, 0x00, 0xf0, 0xf0, 0x81, 0xff, 0xff, 0x48, 0x4F, 0x4D, 0x45, 0x41, 0x50, 0x50}; // Step 2: Make the new application
-    uint8_t cmdsel[11]={0, 0xa4, 4, 0, 7, 0x48, 0x4F, 0x4D, 0x45, 0x41, 0x50, 0x50}; // We'll make use of this a lot
+    uint8_t cmdmakeapp[20] = {0x80, 0xe0, 0, 1, 15, 0x38, 0x4, 0x00, 0xf0, 0xf0, 0x81, 0xff, 0xff, 0x48, 0x4F, 0x4D, 0x45, 0x41, 0x50, 0x50}; // Step 2: Make the new application
+    uint8_t cmdsel[12]={0, 0xa4, 4, 0, 7, 0x48, 0x4F, 0x4D, 0x45, 0x41, 0x50, 0x50}; // We'll make use of this a lot
     uint8_t cmdmakekey[12]={0x80, 0xE0, 0xFF, 0xFE, 0x07, 0x3F, 0x00, 0xB0, 0x81, 0xF0, 0xFF, 0xFF}; // Keyfile
     uint8_t cmdmakebin[12]={0x80, 0xE0, 0, 4, 0x07, 0x68, 0, 8, 0xF2, 0xF3, 0xFF, 0x7F}; // Config file
     uint8_t cmdmakerec[12]={0x80, 0xE0, 0, 3, 0x07, 0x2e, 0x0a, 23, 0xF2, 0xEF, 0xFF, 0x74}; // Records file
@@ -368,7 +368,7 @@ int FudanCharge(uint8_t *uid, uint8_t *dataout, int maxdataoutlen, int *dataoutl
     FudanKDF(uid, 0x36, mackey);
     int garbage = 30;
     uint8_t buffer[250] = {0}; // Garbage zone, maybe there is a better way
-    uint8_t cmdsel[11] = {0x00, 0xa4, 0x04, 0x00, 0x07, 0x48, 0x4F, 0x4D, 0x45, 0x41, 0x50, 0x50}; // Step 1: Select the access control app
+    uint8_t cmdsel[12] = {0x00, 0xa4, 0x04, 0x00, 0x07, 0x48, 0x4F, 0x4D, 0x45, 0x41, 0x50, 0x50}; // Step 1: Select the access control app
     uint8_t getnt[5] = {0, 0x84, 0, 0, 4}; // Get challenge to authenticate
     uint8_t sendar[13] = {0, 0x82, 0, 2, 8, 0}; // Send response. Must be filled in place
     uint8_t ar[8] = {0};
@@ -439,7 +439,7 @@ int FudanReCharge(uint8_t *uid, uint8_t *value, uint8_t *dataout, int maxdataout
     uint8_t pincode[2] = {0};
     FudanKDF(uid, 1, pincode);
     uint8_t buffer[250] = {0}; // Garbage zone, maybe there is a better way
-    uint8_t cmdsel[11] = {0x00, 0xa4, 0x04, 0x00, 0x06, 0x54, 0x52, 0x4F, 0x49, 0x4B, 0x41}; // Step 1: Select troika app
+    uint8_t cmdsel[11] = {0x00, 0xa4, 0x04, 0x00, 0x06, 0x54, 0x52, 0x4F, 0x49, 0x4B, 0x41}; // Step 1: Select access control app
     uint8_t cmdunlock[7] = {0x00, 0x20, 0x00, 0x00, 0x02, pincode[0], pincode[1]}; // Step 2: do PIN unlock so we can recharge wallet
     uint8_t cmdreadbal[5]={0x80, 0x5c, 0x00, 0x01, 0x04}; // Step 3: read balance so user knows what they altered
     uint8_t cmdcharge1[16] = {0x80, 0x50, 0x00, 0x01, 0x0b, 0x03, 0x00, 0x00, value[0], value[1], 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
