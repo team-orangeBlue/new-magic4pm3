@@ -463,7 +463,7 @@ static int CmdHFMFPInfo(const char *Cmd) {
 static int CmdFudanInit(const char *Cmd){
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf mfp fudanprep",
-                  "Prepares FMCOS chips for use with troika app. VOS use only.\n",
+                  "Prepares FMCOS chips for use with access control app. VOS use only.\n",
                   "hf mfp fudanprep\n"
                  );
 
@@ -494,7 +494,8 @@ static int CmdFudanInit(const char *Cmd){
 static int CmdFudanCharge(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf mfp charge",
-                  "Executes charge on FMCOS chip with troika app. VOS use only.\n",
+                  "Executes entry decrement on FMCOS chip with access control app. VOS use only.\n",
+                  "You should NEVER have to use this, as the counter must always go up!\n",
                   "hf mfp charge\n"
                  );
 
@@ -530,7 +531,7 @@ static int CmdFudanCharge(const char *Cmd) {
 static int CmdFudanReCharge(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf mfp recharge",
-                  "Executes reload on fmcos chip with troika app. VOS use only.\n",
+                  "Executes entry increment on fmcos chip with access control app. VOS use only.\n",
                   "hf mfp recharge\n"
                  );
 
