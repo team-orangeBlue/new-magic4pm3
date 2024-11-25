@@ -12,7 +12,6 @@ from colors import color
 
 debug = False
 
-
 def guess_curvename(signature):
     siglen = (len(signature) // 2) & 0xfe
     if siglen == 32:
@@ -28,9 +27,9 @@ def guess_curvename(signature):
     elif siglen == 132:
         curves = ["secp521r1"]
     else:
-        raise ValueError("Unsupported signature size %i" % len(signature))
+        lenstr = color('%i', fg='red') % len(signature)
+        raise ValueError("Unsupported signature size %s" % lenstr)
     return curves
-
 
 def recover(data, signature, curvename, alghash=None):
     recovered = set()
@@ -60,7 +59,6 @@ def recover(data, signature, curvename, alghash=None):
             except ValueError:
                 pass
     return recovered
-
 
 def recover_multiple(uids, sigs, curvename, alghash=None):
     recovered = set()
@@ -147,7 +145,7 @@ def selftests():
          # (and it uses a SHA256)
          'samples': ["E0040118009C870C", "4B4E03E1211952EF6A5F9D84AB218CD4D7549D0CDF8CA8779F9AD16C9A9CBF3B",
                      "E0040118009B4D62", "25CF13747C3389EC7889DE916E3747584978511CC78B51CFB1883B494CBED7AB"],
-         'pk': "04d64bb732c0d214e7ec580736acf847284b502c25c0f7f2fa86aace1dada4387a"},
+         'pk': "04D64BB732C0D214E7EC580736ACF847284B502C25C0F7F2FA86AACE1DADA4387A"},
 
         {'name': "ICODE DNA, ICODE SLIX2",
          # ! tag UID is considered inverted: E0040118009B5FEE => EE5F9B00180104E0
@@ -166,22 +164,47 @@ def selftests():
         'pk': "040F732E0EA7DF2B38F791BF89425BF7DCDF3EE4D976669E3831F324FF15751BD52AFF1782F72FF2731EEAD5F63ABE7D126E03C856FFB942AF"},
 
 #        {'name': "MIFARE Ultralight AES",
-        # uses ,
-#        'samples': ["04E163C2451390", "240284F3F2703C6911D2E7B4211A421378C3DE911F6E9DA120224508C72D4CDE58F3DBEE065C824BA595AB0352888516",
-#                    "042F6892457080", "1824472A4CC927C7CA423F2B75E8E15CD26F682D3D633B3E032879B11D2E7C0E5BDC720D7D4F3AB04DEC7229EC213C89"],
+        # uses NID_secp192r1,  OpenSSL doesn't support it.  This is commented out until that day.
+#        'samples': ["045E4CC2451390", "C9BBDA1B99EB6634CDFD8E3251AC5C4742EA5FA507B8A8A8B39B19AB7340D173331589C54C56C49F0CCA6DDBAC1E492A",
+#                    "043F88C2451390", "5C2055A7373F119C3FDD9843020B06AA0E6DE18C16496C425C4AD971A50F05FA1A67B9E39CA60C355EEEEBF8214A84A5"],
 #        'pk': "0453BF8C49B7BD9FE3207A91513B9C1D238ECAB07186B772104AB535F7D3AE63CF7C7F3DD0D169DA3E99E43C6399621A86"},
 
-        {'name': "Manufacturer MIFARE Classic / QL88",
+        {'name': "MIFARE Classic / QL88",
          'samples': ["30933C61", "AEA4DD0B800FAC63D4DE08EE91F4650ED825FD6B4D7DEEE98DBC9BAE10BE003E",
                      "20593261", "F762CDD59EEDC075F4DDBA7ECD529FEEE5135C65A84D12EF0A250A321B2012F5"],
          'pk': "046F70AC557F5461CE5052C8E4A7838C11C7A236797E8A0730A101837C004039C2"},
 
+        # TruST25 (ST25TA) - KeyID 0x01?
+        # curve=secp128r1, hash=sha256 - from block 224 in ST25TA NDEF file
+        {'name': "ST25TA02KB TruST25 (ST) / KeyID 0x01?",
+         'samples': ["02E3002FCD4038", "E71B844BCE76C8110B36E5B1E1C0410381BD994F226D5C11D84CA6697A5EB572",
+                     "02E3002FCD4205", "5BE94577A06BC3030B1B3CECDC846E8128DDF81008DDEECBAF78CE91CDA27DBD",
+                     "02E3002FCD44BE", "895EE509DE9D98E2FDAC7ADCC976F24B085D73D063986EF59FE260D9BE08D28C"],
+         'pk': "041D92163650161A2548D33881C235D0FB2315C2C31A442F23C87ACF14497C0CBA"},
+
+        # TruST25 (ST25TN) - KeyID 0x05 (b31-b24 of block 45)
+        # curve=secp128r1, hash=sha256 - from block 52 in ST25TN, followed by ascii UID
+        {'name': "ST25TN512/01K TruST25 (ST) / KeyID 0x05",
+         'samples': ["020339A5940000", "A5E968CEDD7278C46F0FF7ECABAD649C229BCA444915D307E69C1945FA95C9C6",
+                     "02643AFD04A000", "0938D86193C603E1B30B17C8117A930205CAC1A8CE88F0EA269FCE2A44244D7B"],
+         'pk': "0440004F974F7C76BC8718E523D85FA7B354A9A992BFA966CB8219242F9D274FD6"},
+
+        # TruST25 (ST25TV) - KeyID 0x04?
+        # curve=secp128r1, hash=sha256 - from block 63 in ST25TV, starting with KeyID ?
+        {'name': "ST25TV02KC TruST25 (ST) / KeyID 0x04?",
+         'samples': ["E00208000A227AAA", "FE458A550ACD30B45B9C4D10676FC63E30AC69027217547FBDF04A8F7942AD3B",
+                     "E00208000A17DB6E", "B3ED5025F16455AAC6012CA1C1FC5F94F8C805AF1EF6A86B646081C9916CDD2E",
+                     "E00208000A174F60", "AB42F1FA68D7470F91D4ED77C4D951B1B4AAB006812BE194BFEB7AAE48E4FA45"],
+         'pk': "04101E188A8B4CDDBC62D5BC3E0E6850F0C2730E744B79765A0E079907FBDB01BC"},
     ]
     succeeded = True
     for t in tests:
-        print("Testing %-25s" % (t['name']+":"), end="")
+
+        print("Testing %-38s" % (t['name']+":"), end="")
+
         curvenames = guess_curvename(t['samples'][1])
         recovered = set()
+
         for c in curvenames:
             for h in [None, "md5", "sha1", "sha256", "sha512"]:
                 recovered |= recover_multiple(t['samples'][::2], t['samples'][1::2], c, alghash=h)
@@ -190,22 +213,26 @@ def selftests():
             pk = recovered.pop()
             pk = binascii.hexlify(pk).decode('utf8')
             if pk.lower() == t['pk'].lower():
-                print("[OK]")
+                print("( %s )" % color('ok', fg='green'))
             else:
                 succeeded = False
-                print("[FAIL], got %s" % pk.lower())
+                print("( FAIL ) got %s" % pk.lower())
         elif len(t['samples'])//2 == 1:
             pks = [binascii.hexlify(pk).decode('utf8').lower() for pk in list(recovered)]
             if t['pk'].lower() in pks:
-                print("[OK] (partial)")
+                print("( %s ) partial" % color('ok', fg='green'))
             else:
                 succeeded = False
-                print("[FAIL], got %s" % pks)
+                print("( %s ), got %s" % color('fail', fg='red'), pks)
         else:
+            print("( %s )" % color('fail', fg='red'))
             succeeded = False
-            print("[FAIL]")
-    print("Tests:                           [%s]" % ["FAIL", "OK"][succeeded])
 
+    print("=====================================================")
+    fail = color('fail', fg='red')
+    ok = color('ok', fg='green')
+    print("Tests:                                        ( %s )" % [fail, ok][succeeded])
+    print("")
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "selftests":

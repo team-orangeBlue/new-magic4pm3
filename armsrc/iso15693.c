@@ -1009,7 +1009,7 @@ int GetIso15693AnswerFromTag(uint8_t *response, uint16_t max_len, uint16_t timeo
     }
 
     uint32_t dma_start_time = 0;
-    uint16_t *upTo = dma->buf;
+    const uint16_t *upTo = dma->buf;
 
     for (;;) {
 
@@ -1502,7 +1502,7 @@ int GetIso15693CommandFromReader(uint8_t *received, size_t max_len, uint32_t *eo
         if (g_dbglevel > DBG_ERROR) Dbprintf("FpgaSetupSscDma failed. Exiting");
         return -4;
     }
-    uint8_t *upTo = dma->buf;
+    const uint8_t *upTo = dma->buf;
 
     uint32_t dma_start_time = GetCountSspClk() & 0xfffffff8;
 
@@ -1603,7 +1603,7 @@ void AcquireRawAdcSamplesIso15693(void) {
     SpinDelay(250);
 
     // Now send the command
-    tosend_t *ts = get_tosend();
+    const tosend_t *ts = get_tosend();
 
     uint32_t start_time = 0;
     TransmitTo15693Tag(ts->buf, ts->max, &start_time, false);
@@ -1681,7 +1681,7 @@ void SniffIso15693(uint8_t jam_search_len, uint8_t *jam_search_string, bool icla
     // Count of samples received so far, so that we can include timing
     int samples = 0;
 
-    uint16_t *upTo = dma->buf;
+    const uint16_t *upTo = dma->buf;
 
     for (;;) {
 
@@ -1902,7 +1902,7 @@ static void BuildIdentifyRequest(uint8_t *cmd) {
 //  If you do not need the answer use NULL for *recv[]
 //  return: length of received data
 // logging enabled
-int SendDataTag(uint8_t *send, int sendlen, bool init, bool speed_fast, uint8_t *recv,
+int SendDataTag(const uint8_t *send, int sendlen, bool init, bool speed_fast, uint8_t *recv,
                 uint16_t max_recv_len, uint32_t start_time, uint16_t timeout, uint32_t *eof_time, uint16_t *resp_len) {
 
     if (init) {
@@ -1918,7 +1918,7 @@ int SendDataTag(uint8_t *send, int sendlen, bool init, bool speed_fast, uint8_t 
         CodeIso15693AsReader256(send, sendlen);
     }
 
-    tosend_t *ts = get_tosend();
+    const tosend_t *ts = get_tosend();
     TransmitTo15693Tag(ts->buf, ts->max, &start_time, false);
 
     if (tearoff_hook() == PM3_ETEAROFF) { // tearoff occurred
@@ -1941,7 +1941,7 @@ int SendDataTag(uint8_t *send, int sendlen, bool init, bool speed_fast, uint8_t 
 int SendDataTagEOF(uint8_t *recv, uint16_t max_recv_len, uint32_t start_time, uint16_t timeout, uint32_t *eof_time, bool fsk, bool recv_speed, uint16_t *resp_len) {
 
     CodeIso15693AsReaderEOF();
-    tosend_t *ts = get_tosend();
+    const tosend_t *ts = get_tosend();
     TransmitTo15693Tag(ts->buf, ts->max, &start_time, false);
     uint32_t end_time = start_time + 32 * (8 * ts->max - 4); // subtract the 4 padding bits after EOF
     LogTrace_ISO15693(NULL, 0, (start_time * 4), (end_time * 4), NULL, true);
@@ -1959,9 +1959,9 @@ int SendDataTagEOF(uint8_t *recv, uint16_t max_recv_len, uint32_t start_time, ui
 
 // Decodes a message from a tag and displays its metadata and content
 #define DBD15STATLEN 48
-static void DbdecodeIso15693Answer(int len, uint8_t *d) {
+static void DbdecodeIso15693Answer(int n, const uint8_t *d) {
 
-    if (len > 3) {
+    if (n > 3) {
 
         char status[DBD15STATLEN + 1] = {0};
 
@@ -2007,7 +2007,7 @@ static void DbdecodeIso15693Answer(int len, uint8_t *d) {
             strncat(status, "No error ", DBD15STATLEN - strlen(status));
         }
 
-        if (CheckCrc15(d, len))
+        if (CheckCrc15(d, n))
             strncat(status, "[+] crc ( " _GREEN_("ok") " )", DBD15STATLEN - strlen(status));
         else
             strncat(status, "[!] crc ( " _RED_("fail") " )", DBD15STATLEN - strlen(status));
@@ -2127,7 +2127,7 @@ void EmlClearIso15693(void) {
 
 // Simulate an ISO15693 TAG, perform anti-collision and then print any reader commands
 // all demodulation performed in arm rather than host. - greg
-void SimTagIso15693(uint8_t *uid, uint8_t block_size) {
+void SimTagIso15693(const uint8_t *uid, uint8_t block_size) {
 
     // free eventually allocated BigBuf memory
     BigBuf_free_keep_EM();
@@ -2581,7 +2581,7 @@ void SimTagIso15693(uint8_t *uid, uint8_t block_size) {
             AddCrc15(recv, recvLen);
             recvLen += 2;
             CodeIso15693AsTag(recv, recvLen);
-            tosend_t *ts = get_tosend();
+            const tosend_t *ts = get_tosend();
             uint32_t response_time = reader_eof_time + DELAY_ISO15693_VCD_TO_VICC_SIM;
 
             if (tag->expectFsk) { // Not suppoted yet
@@ -2890,21 +2890,14 @@ void SetTag15693Uid(const uint8_t *uid) {
     uint8_t cmd[4][9] = {
         {ISO15_REQ_DATARATE_HIGH, ISO15693_WRITEBLOCK, 0x3e, 0x00, 0x00, 0x00, 0x00, 0xE9, 0x8F},
         {ISO15_REQ_DATARATE_HIGH, ISO15693_WRITEBLOCK, 0x3f, 0x69, 0x96, 0x00, 0x00, 0x8A, 0xBB},
-        {ISO15_REQ_DATARATE_HIGH, ISO15693_WRITEBLOCK, 0x38},
-        {ISO15_REQ_DATARATE_HIGH, ISO15693_WRITEBLOCK, 0x39}
+
+        // Command 3 : 02 21 38 u8u7u6u5 (where uX = uid byte X)
+        {ISO15_REQ_DATARATE_HIGH, ISO15693_WRITEBLOCK, 0x38, uid[7], uid[6], uid[5], uid[4]},
+
+        // Command 4 : 02 21 39 u4u3u2u1 (where uX = uid byte X)
+        {ISO15_REQ_DATARATE_HIGH, ISO15693_WRITEBLOCK, 0x39, uid[3], uid[2], uid[1], uid[0]}
     };
 
-    // Command 3 : 02 21 38 u8u7u6u5 (where uX = uid byte X)
-    cmd[2][3] = uid[7];
-    cmd[2][4] = uid[6];
-    cmd[2][5] = uid[5];
-    cmd[2][6] = uid[4];
-
-    // Command 4 : 02 21 39 u4u3u2u1 (where uX = uid byte X)
-    cmd[3][3] = uid[3];
-    cmd[3][4] = uid[2];
-    cmd[3][5] = uid[1];
-    cmd[3][6] = uid[0];
 
     AddCrc15(cmd[2], 7);
     AddCrc15(cmd[3], 7);
@@ -2937,6 +2930,53 @@ void SetTag15693Uid(const uint8_t *uid) {
     reply_ng(CMD_HF_ISO15693_CSETUID, res, NULL, 0);
     switch_off();
 }
+
+// Set the UID on Magic ISO15693 tag ( Gen2 ?)
+// E0 00 09   - seem to be command
+// 0x41, 0x40 - seem to be block referens
+void SetTag15693Uid_v2(const uint8_t *uid) {
+
+    LED_A_ON();
+    uint8_t cmd[4][10] = {
+        { ISO15_REQ_DATARATE_HIGH, ISO15693_MAGIC_WRITE, 0x09, 0x47, 0x3f, 0x03, 0x8b, 0x00,  0x00, 0x00 },
+        { ISO15_REQ_DATARATE_HIGH, ISO15693_MAGIC_WRITE, 0x09, 0x52, 0x00, 0x00, 0x00, 0x00,  0x00, 0x00 },
+        // hf 15 raw -wac -d 02 e0 09 41 + uid first four bytes
+        {ISO15_REQ_DATARATE_HIGH, ISO15693_MAGIC_WRITE, 0x09, 0x40, uid[7], uid[6], uid[5], uid[4], 0x00, 0x00},
+        // hf 15 raw -wac -d 02 e0 09 40 + uid last four bytes
+        {ISO15_REQ_DATARATE_HIGH, ISO15693_MAGIC_WRITE, 0x09, 0x41, uid[3], uid[2], uid[1], uid[0], 0x00, 0x00}
+    };
+
+    uint8_t buf[ISO15693_MAX_RESPONSE_LENGTH] = {0x00};
+
+    uint32_t start_time = 0;
+    uint32_t eof_time = 0;
+    uint16_t recvlen = 0;
+
+    int res = PM3_SUCCESS;
+
+    for (int i = 0; i < 4; i++) {
+
+        AddCrc15(cmd[i], 8);
+        res = SendDataTag(
+                  cmd[i],
+                  sizeof(cmd[i]),
+                  (i == 0) ? true : false,
+                  true,
+                  buf,
+                  sizeof(buf),
+                  start_time,
+                  ISO15693_READER_TIMEOUT_WRITE,
+                  &eof_time,
+                  &recvlen
+              );
+
+        start_time = eof_time + DELAY_ISO15693_VICC_TO_VCD_READER;
+    }
+
+    reply_ng(CMD_HF_ISO15693_CSETUID_V2, res, NULL, 0);
+    switch_off();
+}
+
 
 static void init_password_15693_Slix(uint8_t *buffer, const uint8_t *pwd, const uint8_t *rnd) {
     memcpy(buffer, pwd, 4);
@@ -2988,7 +3028,7 @@ static uint32_t disable_privacy_15693_Slix(uint32_t start_time, uint32_t *eof_ti
     return PM3_SUCCESS;
 }
 
-static uint32_t set_pass_15693_Slix(uint32_t start_time, uint32_t *eof_time, uint8_t pass_id, const uint8_t *password, uint8_t *uid) {
+static uint32_t set_pass_15693_Slix(uint32_t start_time, uint32_t *eof_time, uint8_t pass_id, const uint8_t *password, const uint8_t *uid) {
 
 
     uint8_t rnd[2];
@@ -3101,7 +3141,7 @@ static uint32_t enable_eas_15693_Slix(uint32_t start_time, uint32_t *eof_time, c
     return PM3_SUCCESS;
 }
 
-static uint32_t write_password_15693_Slix(uint32_t start_time, uint32_t *eof_time, uint8_t pwd_id, const uint8_t *password, uint8_t *uid) {
+static uint32_t write_password_15693_Slix(uint32_t start_time, uint32_t *eof_time, uint8_t pwd_id, const uint8_t *password, const uint8_t *uid) {
 
     uint8_t new_pwd_cmd[] = { (ISO15_REQ_DATARATE_HIGH | ISO15_REQ_ADDRESS), ISO15693_WRITE_PASSWORD, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, pwd_id, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
 

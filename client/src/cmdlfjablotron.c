@@ -240,7 +240,7 @@ static int CmdJablotronClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf jablotron reader`") " to verify");
     return res;
 }
@@ -310,7 +310,7 @@ static command_t CommandTable[] = {
     {"help",    CmdHelp,            AlwaysAvailable, "This help"},
     {"demod",   CmdJablotronDemod,  AlwaysAvailable, "demodulate an Jablotron tag from the GraphBuffer"},
     {"reader",  CmdJablotronReader, IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",   CmdJablotronClone,  IfPm3Lf,         "clone jablotron tag to T55x7 or Q5/T5555"},
+    {"clone",   CmdJablotronClone,  IfPm3Lf,         "clone jablotron tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",     CmdJablotronSim,    IfPm3Lf,         "simulate jablotron tag"},
     {NULL, NULL, NULL, NULL}
 };

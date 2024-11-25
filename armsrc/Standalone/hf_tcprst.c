@@ -110,7 +110,8 @@ void RunMod(void) {
 #define DYNAMIC_RESPONSE_BUFFER_SIZE 64
 #define DYNAMIC_MODULATION_BUFFER_SIZE 512
 
-    uint8_t flags = FLAG_7B_UID_IN_DATA; // ST25TA have 7B UID
+    uint8_t flags = 0;
+    FLAG_SET_UID_IN_DATA(flags, 7); // ST25TA have 7B UID
     uint8_t data[PM3_CMD_DATA_SIZE] = {0x00}; // in case there is a read command received we shouldn't break
 
     // to initialize the emulation
@@ -192,7 +193,7 @@ void RunMod(void) {
 
             memcpy(data, stuid, sizeof(stuid));
 
-            if (SimulateIso14443aInit(tagType, flags, data, &responses, &cuid, counters, tearings, &pages) == false) {
+            if (SimulateIso14443aInit(tagType, flags, data, NULL, 0, &responses, &cuid, counters, tearings, &pages) == false) {
                 BigBuf_free_keep_EM();
                 reply_ng(CMD_HF_MIFARE_SIMULATE, PM3_EINIT, NULL, 0);
                 DbpString(_YELLOW_("!!") "Error initializing the simulation process!");
@@ -217,7 +218,7 @@ void RunMod(void) {
             while (!gotkey) {
                 LED_B_OFF();
                 // Clean receive command buffer
-                if (!GetIso14443aCommandFromReader(receivedCmd, receivedCmdPar, &len)) {
+                if (!GetIso14443aCommandFromReader(receivedCmd, sizeof(receivedCmd), receivedCmdPar, &len)) {
                     DbpString(_YELLOW_("!!") "Emulator stopped");
                     retval = PM3_EOPABORTED;
                     break;
@@ -324,7 +325,7 @@ void RunMod(void) {
                 for (uint8_t i = 0; i < 5; i++) {
                     gotndef = false;
                     LED_B_ON();
-                    uint8_t apdulen = iso14_apdu(apdus[i], (uint16_t) apdusLen[i], false, apdubuffer, NULL);
+                    uint8_t apdulen = iso14_apdu(apdus[i], (uint16_t) apdusLen[i], false, apdubuffer, sizeof(apdubuffer), NULL);
 
                     if (apdulen > 2) {
                         DbpString(_YELLOW_("[ ") "Proxmark command" _YELLOW_(" ]"));
@@ -370,7 +371,7 @@ void RunMod(void) {
 
             memcpy(data, stuid, sizeof(stuid));
 
-            if (SimulateIso14443aInit(tagType, flags, data, &responses, &cuid, counters, tearings, &pages) == false) {
+            if (SimulateIso14443aInit(tagType, flags, data, NULL, 0, &responses, &cuid, counters, tearings, &pages) == false) {
                 BigBuf_free_keep_EM();
                 reply_ng(CMD_HF_MIFARE_SIMULATE, PM3_EINIT, NULL, 0);
                 DbpString(_YELLOW_("!!") "Error initializing the simulation process!");
@@ -395,7 +396,7 @@ void RunMod(void) {
             for (;;) {
                 LED_B_OFF();
                 // Clean receive command buffer
-                if (!GetIso14443aCommandFromReader(receivedCmd, receivedCmdPar, &len)) {
+                if (!GetIso14443aCommandFromReader(receivedCmd, sizeof(receivedCmd), receivedCmdPar, &len)) {
                     DbpString(_YELLOW_("!!") "Emulator stopped");
                     retval = PM3_EOPABORTED;
                     break;

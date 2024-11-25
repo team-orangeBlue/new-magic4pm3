@@ -36,12 +36,30 @@ typedef struct {
     const char *hint;
 } hintAIDList_t;
 
+typedef enum {
+    MTNONE = 0,
+    MTCLASSIC = 1,
+    MTMINI = 2,
+    MTDESFIRE = 4,
+    MTPLUS = 8,
+    MTULTRALIGHT = 16,
+    HID_SEOS = 32,
+    MTOTHER = 64,
+    MTEMV = 128,
+    MTFUDAN = 256,
+    MTISO18092 = 512,
+    MT424 = 1024,
+} nxp_mifare_type_t;
+
 int CmdHF14A(const char *Cmd);
 int CmdHF14ASniff(const char *Cmd);         // used by hf topaz sniff
 int CmdHF14ASim(const char *Cmd);           // used by hf mfu sim
+int CmdHF14AAIDSim(const char *Cmd);
 int CmdHF14ANdefRead(const char *Cmd);      // used by cmdnfc.c
 int CmdHF14ANdefFormat(const char *Cmd);    // used by cmdnfc.c
 int CmdHF14ANdefWrite(const char *Cmd);     // used by cmdnfc.c
+
+int detect_nxp_card(uint8_t sak, uint16_t atqa, uint64_t select_status);
 
 int hf14a_getconfig(hf14a_config *config);
 int hf14a_setconfig(hf14a_config *config, bool verbose);
@@ -49,7 +67,7 @@ int infoHF14A(bool verbose, bool do_nack_test, bool do_aid_search);
 int infoHF14A4Applications(bool verbose);
 const char *getTagInfo(uint8_t uid);
 int Hf14443_4aGetCardData(iso14a_card_select_t *card);
-int ExchangeAPDU14a(uint8_t *datain, int datainlen, bool activateField, bool leaveSignalON, uint8_t *dataout, int maxdataoutlen, int *dataoutlen);
+int ExchangeAPDU14a(const uint8_t *datain, int datainlen, bool activateField, bool leaveSignalON, uint8_t *dataout, int maxdataoutlen, int *dataoutlen);
 int ExchangeRAW14a(uint8_t *datain, int datainlen, bool activateField, bool leaveSignalON, uint8_t *dataout, int maxdataoutlen, int *dataoutlen, bool silentMode);
 
 iso14a_polling_parameters_t iso14a_get_polling_parameters(bool use_ecp, bool use_magsafe);

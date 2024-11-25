@@ -236,8 +236,8 @@ static int CmdPacClone(const char *Cmd) {
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
 
-    uint8_t cnstr[9];
-    int cnlen = 9;
+    uint8_t cnstr[10] = {0};
+    int cnlen = sizeof(cnstr) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     memset(cnstr, 0x00, sizeof(cnstr));
     CLIGetStrWithReturn(ctx, 1, cnstr, &cnlen);
 
@@ -304,7 +304,7 @@ static int CmdPacClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf pac reader`") " to verify");
     return res;
 }
@@ -329,7 +329,7 @@ static int CmdPacSim(const char *Cmd) {
     CLIExecWithReturn(ctx, Cmd, argtable, false);
 
     uint8_t cnstr[10];
-    int cnlen = 9;
+    int cnlen = sizeof(cnstr) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     memset(cnstr, 0x00, sizeof(cnstr));
     CLIGetStrWithReturn(ctx, 1, cnstr, &cnlen);
 
@@ -391,7 +391,7 @@ static command_t CommandTable[] = {
     {"help",  CmdHelp,        AlwaysAvailable, "This help"},
     {"demod", CmdPacDemod,    AlwaysAvailable, "demodulate a PAC tag from the GraphBuffer"},
     {"reader",  CmdPacReader, IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone", CmdPacClone,    IfPm3Lf,         "clone PAC tag to T55x7"},
+    {"clone", CmdPacClone,    IfPm3Lf,         "clone PAC tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",   CmdPacSim,      IfPm3Lf,         "simulate PAC tag"},
     {NULL, NULL, NULL, NULL}
 };

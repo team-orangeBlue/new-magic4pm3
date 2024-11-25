@@ -26,7 +26,7 @@
 
 static int CmdHelp(const char *Cmd);
 
-int flashmem_spiffs_load(char *destfn, uint8_t *data, size_t datalen) {
+int flashmem_spiffs_load(const char *destfn, const uint8_t *data, size_t datalen) {
 
     int ret_val = PM3_SUCCESS;
 
@@ -262,9 +262,9 @@ static int CmdFlashMemSpiFFSRemove(const char *Cmd) {
     clearCommandBuffer();
     SendCommandNG(CMD_SPIFFS_REMOVE, (uint8_t *)&payload, sizeof(payload));
     WaitForResponse(CMD_SPIFFS_REMOVE, &resp);
-    if (resp.status == PM3_SUCCESS)
+    if (resp.status == PM3_SUCCESS) {
         PrintAndLogEx(INFO, "Done!");
-
+    }
     return PM3_SUCCESS;
 }
 
@@ -310,8 +310,9 @@ static int CmdFlashMemSpiFFSRename(const char *Cmd) {
     clearCommandBuffer();
     SendCommandNG(CMD_SPIFFS_RENAME, (uint8_t *)&payload, sizeof(payload));
     WaitForResponse(CMD_SPIFFS_RENAME, &resp);
-    if (resp.status == PM3_SUCCESS)
+    if (resp.status == PM3_SUCCESS) {
         PrintAndLogEx(INFO, "Done!");
+    }
 
     PrintAndLogEx(HINT, "Try `" _YELLOW_("mem spiffs tree") "` to verify");
     return PM3_SUCCESS;
@@ -358,8 +359,9 @@ static int CmdFlashMemSpiFFSCopy(const char *Cmd) {
     clearCommandBuffer();
     SendCommandNG(CMD_SPIFFS_COPY, (uint8_t *)&payload, sizeof(payload));
     WaitForResponse(CMD_SPIFFS_COPY, &resp);
-    if (resp.status == PM3_SUCCESS)
+    if (resp.status == PM3_SUCCESS) {
         PrintAndLogEx(INFO, "Done!");
+    }
 
     PrintAndLogEx(HINT, "Try `" _YELLOW_("mem spiffs tree") "` to verify");
     return PM3_SUCCESS;
@@ -429,9 +431,14 @@ static int CmdFlashMemSpiFFSDump(const char *Cmd) {
         PrintAndLogEx(HINT, "Use 'trace list -1 -t ...' to view, 'trace save -f ...' to save");
     }
 
-    if (dlen) {
+
+    if (dlen || slen) {
+
         // save to file
         char fn[FILE_PATH_SIZE] = {0};
+
+        // prefer dest name
+        // else source name
         if (dlen) {
             strncpy(fn, dest, dlen);
         } else {
@@ -439,7 +446,7 @@ static int CmdFlashMemSpiFFSDump(const char *Cmd) {
         }
 
         // set file extension
-        char *suffix = strchr(fn, '.');
+        const char *suffix = strchr(fn, '.');
         if (suffix) {
             saveFile(fn, suffix, dump, len);
         } else {
@@ -469,8 +476,9 @@ static int CmdFlashMemSpiFFSWipe(const char *Cmd) {
     clearCommandBuffer();
     SendCommandNG(CMD_SPIFFS_WIPE, NULL, 0);
     WaitForResponse(CMD_SPIFFS_WIPE, &resp);
-    if (resp.status == PM3_SUCCESS)
+    if (resp.status == PM3_SUCCESS) {
         PrintAndLogEx(INFO, "Done!");
+    }
 
     PrintAndLogEx(HINT, "Try `" _YELLOW_("mem spiffs tree") "` to verify");
     return PM3_SUCCESS;

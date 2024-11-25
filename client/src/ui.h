@@ -66,6 +66,7 @@ typedef struct {
 } session_arg_t;
 
 extern session_arg_t g_session;
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846264338327
 #endif
@@ -79,6 +80,7 @@ bool GetFlushAfterWrite(void);
 void memcpy_filter_ansi(void *dest, const void *src, size_t n, bool filter);
 void memcpy_filter_rlmarkers(void *dest, const void *src, size_t n);
 void memcpy_filter_emoji(void *dest, const void *src, size_t n, emojiMode_t mode);
+void free_grabber(void);
 
 int searchHomeFilePath(char **foundpath, const char *subdir, const char *filename, bool create_home);
 

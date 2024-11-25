@@ -671,14 +671,14 @@ static int CmdFdxBReader(const char *Cmd) {
 
         if (curr_div == LF_DIVISOR_125) {
             config.divisor = LF_DIVISOR_134;
-            res = lf_config(&config);
+            res = lf_setconfig(&config);
             if (res != PM3_SUCCESS) {
                 PrintAndLogEx(ERR, "failed to change to 134 KHz LF configuration");
                 return res;
             }
         } else {
             config.divisor = LF_DIVISOR_125;
-            res = lf_config(&config);
+            res = lf_setconfig(&config);
             if (res != PM3_SUCCESS) {
                 PrintAndLogEx(ERR, "failed to change to 125 KHz LF configuration");
                 return res;
@@ -694,7 +694,7 @@ static int CmdFdxBReader(const char *Cmd) {
 
     if (old_div != curr_div) {
         config.divisor = old_div;
-        res = lf_config(&config);
+        res = lf_setconfig(&config);
         if (res != PM3_SUCCESS) {
             PrintAndLogEx(ERR, "failed to restore LF configuration");
             return res;
@@ -802,7 +802,7 @@ static int CmdFdxBClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf fdxb reader`") " to verify");
     return res;
 }
@@ -889,7 +889,7 @@ static command_t CommandTable[] = {
     {"help",    CmdHelp,      AlwaysAvailable, "this help"},
     {"demod",   CmdFdxBDemod,  AlwaysAvailable, "demodulate a FDX-B ISO11784/85 tag from the GraphBuffer"},
     {"reader",  CmdFdxBReader, IfPm3Lf,         "attempt to read at 134kHz and extract tag data"},
-    {"clone",   CmdFdxBClone,  IfPm3Lf,         "clone animal ID tag to T55x7 or Q5/T5555"},
+    {"clone",   CmdFdxBClone,  IfPm3Lf,         "clone animal ID tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",     CmdFdxBSim,    IfPm3Lf,         "simulate Animal ID tag"},
     {NULL, NULL, NULL, NULL}
 };

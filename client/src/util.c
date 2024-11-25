@@ -36,8 +36,10 @@
 #define UTIL_BUFFER_SIZE_SPRINT 8196
 // global client debug variable
 uint8_t g_debugMode = 0;
-// global client disable logging variable
+// global client enable/disable printing/logging/grabbing variable
 uint8_t g_printAndLog = PRINTANDLOG_PRINT | PRINTANDLOG_LOG;
+// global pointer to grabbed output
+grabbed_output g_grabbed_output = {NULL, 0, 0};
 // global client tell if a pending prompt is present
 bool g_pendingPrompt = false;
 // global CPU core count override
@@ -527,7 +529,7 @@ char *sprint_hex_ascii(const uint8_t *data, const size_t len) {
 
     while (i < max_len) {
         unsigned char c = (unsigned char)data[i];
-        tmp[pos + i]  = isprint(c) ? c : '.';
+        tmp[pos + i]  = (isprint(c) && c != 0xff) ? c : '.';
         ++i;
     }
 out:
@@ -544,7 +546,7 @@ char *sprint_ascii_ex(const uint8_t *data, const size_t len, const size_t min_st
 
     while (i < max_len) {
         unsigned char c = (unsigned char)data[i];
-        tmp[i]  = isprint(c) ? c : '.';
+        tmp[i]  = (isprint(c) && c != 0xff) ? c : '.';
         ++i;
     }
 
@@ -1145,11 +1147,18 @@ void binstr_2_bytes(uint8_t *target, size_t *targetlen, const char *src) {
     }
 }
 
-void hex_xor(uint8_t *d, uint8_t *x, int n) {
-    while(n--) {
+void hex_xor(uint8_t *d, const uint8_t *x, int n) {
+    while (n--) {
         d[n] ^= x[n];
     }
 }
+
+void hex_xor_token(uint8_t *d, const uint8_t *x, int dn, int xn) {
+    while (dn--) {
+        d[dn] ^= x[dn % xn];
+    }
+}
+
 
 // return parity bit required to match type
 uint8_t GetParity(const uint8_t *bits, uint8_t type, int length) {
@@ -1161,7 +1170,7 @@ uint8_t GetParity(const uint8_t *bits, uint8_t type, int length) {
 }
 
 // add HID parity to binary array: EVEN prefix for 1st half of ID, ODD suffix for 2nd half
-void wiegand_add_parity(uint8_t *target, uint8_t *source, uint8_t length) {
+void wiegand_add_parity(uint8_t *target, const uint8_t *source, uint8_t length) {
     *(target++) = GetParity(source, EVEN, length / 2);
     memcpy(target, source, length);
     target += length;
@@ -1169,7 +1178,7 @@ void wiegand_add_parity(uint8_t *target, uint8_t *source, uint8_t length) {
 }
 
 // add HID parity to binary array: ODD prefix for 1st half of ID, EVEN suffix for 2nd half
-void wiegand_add_parity_swapped(uint8_t *target, uint8_t *source, uint8_t length) {
+void wiegand_add_parity_swapped(uint8_t *target, const uint8_t *source, uint8_t length) {
     *(target++) = GetParity(source, ODD, length / 2);
     memcpy(target, source, length);
     target += length;
@@ -1488,7 +1497,7 @@ uint8_t get_highest_frequency(const uint8_t *d, uint8_t n) {
     uint8_t v = 0;
 
     // Count the frequency of each byte
-    for(uint8_t i = 0; i < n; i++) {
+    for (uint8_t i = 0; i < n; i++) {
         frequency[d[i]]++;
 
         if (frequency[d[i]] > highest) {

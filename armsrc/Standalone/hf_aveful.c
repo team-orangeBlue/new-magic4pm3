@@ -67,38 +67,38 @@ typedef struct {
     uint8_t sak;
 } PACKED card_clone_t;
 
-int get_block_count(iso14a_card_select_t card, uint8_t version[], uint16_t version_len);
-uint16_t get_ev1_version(iso14a_card_select_t card, uint8_t *version);
-uint16_t get_ev1_signature(iso14a_card_select_t card, uint8_t *signature);
-uint16_t get_ev1_counter(iso14a_card_select_t card, uint8_t counter, uint8_t *response);
-uint16_t get_ev1_tearing(iso14a_card_select_t card, uint8_t counter, uint8_t *response);
+int get_block_count(iso14a_card_select_t card, uint8_t *version, uint16_t version_len);
+uint16_t get_ev1_version(iso14a_card_select_t card, uint8_t *version, uint16_t version_len);
+uint16_t get_ev1_signature(iso14a_card_select_t card, uint8_t *signature, uint16_t sign_len);
+uint16_t get_ev1_counter(iso14a_card_select_t card, uint8_t counter, uint8_t *response, uint16_t resp_len);
+uint16_t get_ev1_tearing(iso14a_card_select_t card, uint8_t counter, uint8_t *response, uint16_t resp_len);
 
-uint16_t get_ev1_version(iso14a_card_select_t card, uint8_t *version) {
-    return mifare_sendcmd(MIFARE_ULEV1_VERSION, NULL, 0, version, NULL, NULL);
+uint16_t get_ev1_version(iso14a_card_select_t card, uint8_t *version, uint16_t version_len) {
+    return mifare_sendcmd(MIFARE_ULEV1_VERSION, NULL, 0, version, version_len, NULL, NULL);
 }
 
-uint16_t get_ev1_signature(iso14a_card_select_t card, uint8_t *signature) {
+uint16_t get_ev1_signature(iso14a_card_select_t card, uint8_t *signature, uint16_t sign_len) {
     uint8_t cmd[4] = {MIFARE_ULEV1_READSIG, 0x00, 0x00, 0x00};
     AddCrc14A(cmd, 2);
     ReaderTransmit(cmd, sizeof(cmd), NULL);
-    return ReaderReceive(signature, NULL);
+    return ReaderReceive(signature, sign_len, NULL);
 }
 
-uint16_t get_ev1_counter(iso14a_card_select_t card, uint8_t counter, uint8_t *response) {
+uint16_t get_ev1_counter(iso14a_card_select_t card, uint8_t counter, uint8_t *response, uint16_t resp_len) {
     uint8_t cmd[4] = {MIFARE_ULEV1_READ_CNT, counter, 0x00, 0x00};
     AddCrc14A(cmd, 2);
     ReaderTransmit(cmd, sizeof(cmd), NULL);
-    return ReaderReceive(response, NULL);
+    return ReaderReceive(response, resp_len, NULL);
 }
 
-uint16_t get_ev1_tearing(iso14a_card_select_t card, uint8_t counter, uint8_t *response) {
+uint16_t get_ev1_tearing(iso14a_card_select_t card, uint8_t counter, uint8_t *response, uint16_t resp_len) {
     uint8_t cmd[4] = {MIFARE_ULEV1_CHECKTEAR, counter, 0x00, 0x00};
     AddCrc14A(cmd, 2);
     ReaderTransmit(cmd, sizeof(cmd), NULL);
-    return ReaderReceive(response, NULL);
+    return ReaderReceive(response, resp_len, NULL);
 }
 
-int get_block_count(iso14a_card_select_t card, uint8_t version[], uint16_t version_len) {
+int get_block_count(iso14a_card_select_t card, uint8_t *version, uint16_t version_len) {
     // Default to MAX_DEFAULT_BLOCKS blocks
     int block_count = MAX_DEFAULT_BLOCKS;
     // Most of this code is from cmdhfmfu.c
@@ -185,7 +185,7 @@ void RunMod(void) {
                 // Get version and re-select card as UL EV0s like to shut off after a 0x60
                 uint8_t version[10] = {0x00};
                 uint16_t version_len = 0;
-                version_len = get_ev1_version(card, version);
+                version_len = get_ev1_version(card, version, sizeof(version));
                 iso14443a_select_card(NULL, NULL, NULL, true, 0, true);
 
                 int block_count = get_block_count(card, version, version_len);
@@ -212,7 +212,7 @@ void RunMod(void) {
                 if (read_successful) {
                     uint8_t signature[34] = {0x00};
                     if (is_ev1) {
-                        get_ev1_signature(card, signature);
+                        get_ev1_signature(card, signature, sizeof(signature));
                     }
                     Dbprintf("Preparing emulator memory with:");
                     // Fill first 14 blocks with 0x00 (see comment above)
@@ -232,8 +232,8 @@ void RunMod(void) {
                             // On 11-14 read and set counter and tearing on EV1
                             uint8_t counter[5];
                             uint8_t tearing[3];
-                            get_ev1_counter(card, i - 11, counter);
-                            get_ev1_tearing(card, i - 11, tearing);
+                            get_ev1_counter(card, i - 11, counter, sizeof(counter));
+                            get_ev1_tearing(card, i - 11, tearing, sizeof(tearing));
                             memcpy(dataout, counter, 3);
                             memcpy(dataout + 3, tearing, 1);
                         }
@@ -248,10 +248,11 @@ void RunMod(void) {
                     state = STATE_SEARCH;
                 }
             } else if (state == STATE_EMUL) {
-                uint16_t flags = FLAG_7B_UID_IN_DATA;
+                uint16_t flags = 0;
+                FLAG_SET_UID_IN_DATA(flags, 7);
 
                 Dbprintf("Starting simulation, press " _GREEN_("pm3 button") " to stop and go back to search state.");
-                SimulateIso14443aTag(7, flags, card.uid, 0);
+                SimulateIso14443aTag(7, flags, card.uid, 0, NULL, 0);
 
                 // Go back to search state if user presses pm3-button
                 state = STATE_SEARCH;

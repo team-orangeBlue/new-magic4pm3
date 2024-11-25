@@ -34,8 +34,16 @@ extern uint8_t g_printAndLog;
 extern bool g_pendingPrompt;
 extern int g_numCPUs;
 
+typedef struct {
+    char *ptr;
+    size_t size;
+    size_t idx;
+} grabbed_output;
+extern grabbed_output g_grabbed_output;
+
 #define PRINTANDLOG_PRINT 1
 #define PRINTANDLOG_LOG   2
+#define PRINTANDLOG_GRAB  4
 
 // Return error
 #define PM3_RET_ERR(err, ...)  { \
@@ -133,11 +141,12 @@ int binstr_2_binarray(uint8_t *target, char *source, int length);
 void bytes_2_binstr(char *target,  const uint8_t *source, size_t sourcelen);
 void binstr_2_bytes(uint8_t *target, size_t *targetlen, const char *src);
 
-void hex_xor(uint8_t *d, uint8_t *x, int n);
+void hex_xor(uint8_t *d, const uint8_t *x, int n);
+void hex_xor_token(uint8_t *d, const uint8_t *x, int dn, int xn);
 
 uint8_t GetParity(const uint8_t *bits, uint8_t type, int length);
-void wiegand_add_parity(uint8_t *target, uint8_t *source, uint8_t length);
-void wiegand_add_parity_swapped(uint8_t *target, uint8_t *source, uint8_t length);
+void wiegand_add_parity(uint8_t *target, const uint8_t *source, uint8_t length);
+void wiegand_add_parity_swapped(uint8_t *target, const uint8_t *source, uint8_t length);
 
 //void xor(unsigned char *dst, unsigned char *src, size_t len);
 

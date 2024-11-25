@@ -71,7 +71,7 @@ int demodIOProx(bool verbose) {
         PrintAndLogEx(FAILED, "failed to allocate memory");
         return PM3_EMALLOC;
     }
-    size_t size = getFromGraphBuf(bits);
+    size_t size = getFromGraphBuffer(bits);
     if (size < 65) {
         PrintAndLogEx(DEBUG, "DEBUG: Error - IO prox not enough samples in GraphBuffer");
         free(bits);
@@ -358,7 +358,7 @@ static int CmdIOProxClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf io reader`") " to verify");
     return res;
 }

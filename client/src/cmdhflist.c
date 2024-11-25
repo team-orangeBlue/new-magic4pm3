@@ -30,6 +30,7 @@
 #include "crapto1/crapto1.h"
 #include "protocols.h"
 #include "cmdhficlass.h"
+#include "mifare/mifaredefault.h"  // mifare consts
 
 enum MifareAuthSeq {
     masNone,
@@ -130,7 +131,7 @@ uint8_t iclass_CRC_check(bool isResponse, uint8_t *d, uint8_t n) {
 
     //Commands to tag
     //Don't include the command byte
-    if (!isResponse) {
+    if (isResponse == false) {
         /**
           These commands should have CRC. Total length leftmost
           4 READ
@@ -166,7 +167,7 @@ uint8_t iclass_CRC_check(bool isResponse, uint8_t *d, uint8_t n) {
     In conclusion, without looking at the command; any response
     of length 10 or 34 should have CRC
       **/
-    if (n != 10 && n != 34) return true;
+    if (n != 10 && n != 34) return 2;
 
     return check_crc(CRC_ICLASS, d, n);
 }
@@ -365,7 +366,7 @@ int applyIso14443a(char *exp, size_t size, uint8_t *cmd, uint8_t cmdsize, bool i
                 break;
             case MIFARE_ULEV1_AUTH:
                 if (cmdsize == 7)
-                    snprintf(exp, size, "PWD-AUTH KEY: " _GREEN_("0x%02X%02X%02X%02X"), cmd[1], cmd[2], cmd[3], cmd[4]);
+                    snprintf(exp, size, "PWD-AUTH: " _GREEN_("0x%02X%02X%02X%02X"), cmd[1], cmd[2], cmd[3], cmd[4]);
                 else
                     snprintf(exp, size, "PWD-AUTH");
                 break;
@@ -382,7 +383,7 @@ int applyIso14443a(char *exp, size_t size, uint8_t *cmd, uint8_t cmdsize, bool i
                     snprintf(exp, size, "WRITEBLOCK(" _MAGENTA_("%d") ")", cmd[1]);
                 else
                     // outside limits, useful for some tags...
-                    snprintf(exp, size, "WRITEBLOCK(" _MAGENTA_("%d") ") (?)", cmd[1]);
+                    snprintf(exp, size, "WRITEBLOCK(" _MAGENTA_("%d") ") (%s)", cmd[1], sprint_hex_inrow(cmd + 2, 4));
                 break;
             }
             case MIFARE_ULEV1_READ_CNT : {
@@ -430,6 +431,9 @@ int applyIso14443a(char *exp, size_t size, uint8_t *cmd, uint8_t cmdsize, bool i
             default:
                 if ((cmd[0] & 0xF0) == 0xD0  && (cmdsize == 4 || cmdsize == 5)) {
                     snprintf(exp, size, "PPS - CID=%x", cmd[0] & 0x0F) ;
+                } else if ((cmd[0] & 0xF0) == 0x60  && (cmdsize == 4)) {
+                    MifareAuthState = masNt;
+                    snprintf(exp, size, "AUTH-%02X(" _MAGENTA_("%d") ")", cmd[0], cmd[1]);
                 } else {
                     return PM3_ESOFT;
                 }
@@ -703,6 +707,9 @@ void annotateIso15693(char *exp, size_t size, uint8_t *cmd, uint8_t cmdsize) {
                 return;
             case ISO15693_READ_SIGNATURE:
                 snprintf(exp, size, "READ_SIGNATURE");
+                return;
+            case ISO15693_MAGIC_WRITE:
+                snprintf(exp, size, "MAGIC_WRITEBLOCK");
                 return;
             default:
                 break;
@@ -2057,14 +2064,19 @@ void annotateMifare(char *exp, size_t size, uint8_t *cmd, uint8_t cmdsize,
     switch (MifareAuthState) {
         case masNt:
             if (cmdsize == 4 && isResponse) {
-                snprintf(exp, size, "AUTH: nt %s", (AuthData.first_auth) ? "" : "(enc)");
                 MifareAuthState = masNrAr;
                 if (AuthData.first_auth) {
                     AuthData.nt = bytes_to_num(cmd, 4);
                     AuthData.nt_enc_par = 0;
+                    if (validate_prng_nonce(AuthData.nt)) {
+                        snprintf(exp, size, "AUTH: nt (lfsr16 index %i)", nonce_distance(0, AuthData.nt));
+                    } else {
+                        snprintf(exp, size, "AUTH: nt");
+                    }
                 } else {
                     AuthData.nt_enc = bytes_to_num(cmd, 4);
                     AuthData.nt_enc_par = parity[0] & 0xF0;
+                    snprintf(exp, size, "AUTH: nt (enc)");
                 }
                 return;
             } else {
@@ -2103,9 +2115,9 @@ void annotateMifare(char *exp, size_t size, uint8_t *cmd, uint8_t cmdsize,
             break;
     }
 
-    if ((MifareAuthState == masNone) || (MifareAuthState == masError))
+    if ((MifareAuthState == masNone) || (MifareAuthState == masError)) {
         annotateIso14443a(exp, size, cmd, cmdsize, isResponse);
-
+    }
 }
 
 static void mf_get_paritybinstr(char *s, uint32_t val, uint8_t par) {
@@ -2223,8 +2235,8 @@ bool DecodeMifareData(uint8_t *cmd, uint8_t cmdsize, uint8_t *parity, bool isRes
                 char sat[5] = {0, 0, 0, 0, 0};
                 mf_get_paritybinstr(sat, AuthData.at_enc, AuthData.at_enc_par);
 
-                PrintAndLogEx(NORMAL, "Nested authentication detected. ");
-                PrintAndLogEx(NORMAL, "tools/mf_nonce_brute/mf_nonce_brute %x %x %s %x %x %s %x %s %s\n"
+                PrintAndLogEx(NORMAL, "Nested authentication detected!");
+                PrintAndLogEx(NORMAL, "tools/mfc/card_reader/mf_nonce_brute %x %x %s %x %x %s %x %s %s\n"
                               , AuthData.uid
                               , AuthData.nt_enc
                               , snt

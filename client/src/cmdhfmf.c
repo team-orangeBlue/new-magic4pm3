@@ -44,6 +44,8 @@
 #include "preferences.h"
 #include "mifare/gen4.h"
 #include "generator.h"              // keygens.
+#include "fpga.h"
+#include "mifare/mifarehost.h"
 
 static int CmdHelp(const char *Cmd);
 
@@ -70,8 +72,16 @@ int mfc_ev1_print_signature(uint8_t *uid, uint8_t uidlen, uint8_t *signature, in
     // ref:  MIFARE Classic EV1 Originality Signature Validation
 #define PUBLIC_MFCEV1_ECDA_KEYLEN 33
     const ecdsa_publickey_t nxp_mfc_public_keys[] = {
-        {"NXP MIFARE Classic MFC1C14_x", "044F6D3F294DEA5737F0F46FFEE88A356EED95695DD7E0C27A591E6F6F65962BAF"},
-        {"Manufacturer MIFARE Classic / QL88", "046F70AC557F5461CE5052C8E4A7838C11C7A236797E8A0730A101837C004039C2"},
+        {"NXP MIFARE Classic MFC1C14_x",   "044F6D3F294DEA5737F0F46FFEE88A356EED95695DD7E0C27A591E6F6F65962BAF"},
+        {"MIFARE Classic / QL88",          "046F70AC557F5461CE5052C8E4A7838C11C7A236797E8A0730A101837C004039C2"},
+        {"NXP ICODE DNA, ICODE SLIX2",     "048878A2A2D3EEC336B4F261A082BD71F9BE11C4E2E896648B32EFA59CEA6E59F0"},
+        {"NXP Public key",                 "04A748B6A632FBEE2C0897702B33BEA1C074998E17B84ACA04FF267E5D2C91F6DC"},
+        {"NXP Ultralight Ev1",             "0490933BDCD6E99B4E255E3DA55389A827564E11718E017292FAF23226A96614B8"},
+        {"NXP NTAG21x (2013)",             "04494E1A386D3D3CFE3DC10E5DE68A499B1C202DB5B132393E89ED19FE5BE8BC61"},
+        {"MIKRON Public key",              "04F971EDA742A4A80D32DCF6A814A707CC3DC396D35902F72929FDCD698B3468F2"},
+        {"VivoKey Spark1 Public key",      "04D64BB732C0D214E7EC580736ACF847284B502C25C0F7F2FA86AACE1DADA4387A"},
+        {"TruST25 (ST) key 01?",           "041D92163650161A2548D33881C235D0FB2315C2C31A442F23C87ACF14497C0CBA"},
+        {"TruST25 (ST) key 04?",           "04101E188A8B4CDDBC62D5BC3E0E6850F0C2730E744B79765A0E079907FBDB01BC"},
     };
 
     uint8_t i;
@@ -106,7 +116,7 @@ int mfc_ev1_print_signature(uint8_t *uid, uint8_t uidlen, uint8_t *signature, in
     return PM3_SUCCESS;
 }
 
-static int GetHFMF14AUID(uint8_t *uid, int *uidlen) {
+static int mf_read_uid(uint8_t *uid, int *uidlen, int *nxptype) {
     clearCommandBuffer();
     SendCommandMIX(CMD_HF_ISO14443A_READER, ISO14A_CONNECT, 0, 0, NULL, 0);
     PacketResponseNG resp;
@@ -118,6 +128,12 @@ static int GetHFMF14AUID(uint8_t *uid, int *uidlen) {
 
     iso14a_card_select_t card;
     memcpy(&card, (iso14a_card_select_t *)resp.data.asBytes, sizeof(iso14a_card_select_t));
+
+    if (nxptype) {
+        uint64_t select_status = resp.oldarg[0];
+        *nxptype = detect_nxp_card(card.sak, ((card.atqa[1] << 8) + card.atqa[0]), select_status);
+    }
+
     memcpy(uid, card.uid, card.uidlen * sizeof(uint8_t));
     *uidlen = card.uidlen;
     return PM3_SUCCESS;
@@ -131,7 +147,7 @@ static char *GenerateFilename(const char *prefix, const char *suffix) {
     int uidlen = 0;
     char *fptr = calloc(sizeof(char) * (strlen(prefix) + strlen(suffix)) + sizeof(uid) * 2 + 1,  sizeof(uint8_t));
 
-    int res = GetHFMF14AUID(uid, &uidlen);
+    int res = mf_read_uid(uid, &uidlen, NULL);
     if (res != PM3_SUCCESS || !uidlen) {
         PrintAndLogEx(WARNING, "No tag found.");
         free(fptr);
@@ -445,7 +461,7 @@ static int mf_save_keys_from_arr(uint16_t n, uint8_t *d) {
 
     char fn[FILE_PATH_SIZE] = {0};
     snprintf(fn, sizeof(fn), "hf-mf-%s-key", sprint_hex_inrow(d, 4));
-    saveFile(fn, ".bin", keys, keysize);
+    saveFileEx(fn, ".bin", keys, keysize, spDump);
     free(keys);
     return PM3_SUCCESS;
 }
@@ -479,22 +495,6 @@ void mf_print_sector_hdr(uint8_t sector) {
     PrintAndLogEx(INFO, "----+-------------------------------------------------+-----------------");
 }
 
-static bool mf_write_block(const uint8_t *key, uint8_t keytype, uint8_t blockno, uint8_t *block) {
-
-    uint8_t data[26];
-    memcpy(data, key, MIFARE_KEY_SIZE);
-    memcpy(data + 10, block, MFBLOCK_SIZE);
-
-    clearCommandBuffer();
-    SendCommandMIX(CMD_HF_MIFARE_WRITEBL, blockno, keytype, 0, data, sizeof(data));
-    PacketResponseNG resp;
-    if (WaitForResponseTimeout(CMD_ACK, &resp, 1500) == false) {
-        PrintAndLogEx(FAILED, "Command execute timeout");
-        return false;
-    }
-
-    return ((resp.oldarg[0] & 0xff) == 1);
-}
 
 // assumes n is in number of blocks 0..255
 static void mf_analyse_acl(uint16_t n, uint8_t *d) {
@@ -621,7 +621,7 @@ static int mfc_read_tag(iso14a_card_select_t *card, uint8_t *carddata, uint8_t n
             fflush(stdout);
 
             if (kbd_enter_pressed()) {
-                PrintAndLogEx(WARNING, "\nAborted via keyboard!\n");
+                PrintAndLogEx(WARNING, "\naborted via keyboard!\n");
                 free(fptr);
                 free(keyA);
                 free(keyB);
@@ -756,7 +756,7 @@ static int mfc_read_tag(iso14a_card_select_t *card, uint8_t *carddata, uint8_t n
     return PM3_SUCCESS ;
 }
 
-static int mf_load_keys(uint8_t **pkeyBlock, uint32_t *pkeycnt, uint8_t *userkey, int userkeylen, const char *filename, int fnlen) {
+static int mf_load_keys(uint8_t **pkeyBlock, uint32_t *pkeycnt, uint8_t *userkey, int userkeylen, const char *filename, int fnlen, bool load_default) {
     // Handle Keys
     *pkeycnt = 0;
     *pkeyBlock = NULL;
@@ -779,32 +779,33 @@ static int mf_load_keys(uint8_t **pkeyBlock, uint32_t *pkeycnt, uint8_t *userkey
             PrintAndLogEx(DEBUG, _YELLOW_("%2d") " - %s", i, sprint_hex(*pkeyBlock + i * MIFARE_KEY_SIZE, MIFARE_KEY_SIZE));
         }
         *pkeycnt += numKeys;
-        PrintAndLogEx(SUCCESS, "loaded " _GREEN_("%d") " dynamic keys", numKeys);
+        PrintAndLogEx(SUCCESS, "loaded " _GREEN_("%2d") " user keys", numKeys);
     }
 
-    // Handle default keys
-    p = realloc(*pkeyBlock, (*pkeycnt + ARRAYLEN(g_mifare_default_keys)) * MIFARE_KEY_SIZE);
-    if (!p) {
-        PrintAndLogEx(FAILED, "cannot allocate memory for Keys");
-        free(*pkeyBlock);
-        return PM3_EMALLOC;
+    if (load_default) {
+        // Handle default keys
+        p = realloc(*pkeyBlock, (*pkeycnt + ARRAYLEN(g_mifare_default_keys)) * MIFARE_KEY_SIZE);
+        if (!p) {
+            PrintAndLogEx(FAILED, "cannot allocate memory for Keys");
+            free(*pkeyBlock);
+            return PM3_EMALLOC;
+        }
+        *pkeyBlock = p;
+        // Copy default keys to list
+        for (int i = 0; i < ARRAYLEN(g_mifare_default_keys); i++) {
+            num_to_bytes(g_mifare_default_keys[i], MIFARE_KEY_SIZE, (uint8_t *)(*pkeyBlock + (*pkeycnt + i) * MIFARE_KEY_SIZE));
+            PrintAndLogEx(DEBUG, _YELLOW_("%2d") " - %s", *pkeycnt + i, sprint_hex(*pkeyBlock + (*pkeycnt + i) * MIFARE_KEY_SIZE, MIFARE_KEY_SIZE));
+        }
+        *pkeycnt += ARRAYLEN(g_mifare_default_keys);
+        PrintAndLogEx(SUCCESS, "loaded " _GREEN_("%zu") " hardcoded keys", ARRAYLEN(g_mifare_default_keys));
     }
-    *pkeyBlock = p;
-    // Copy default keys to list
-    for (int i = 0; i < ARRAYLEN(g_mifare_default_keys); i++) {
-        num_to_bytes(g_mifare_default_keys[i], MIFARE_KEY_SIZE, (uint8_t *)(*pkeyBlock + (*pkeycnt + i) * MIFARE_KEY_SIZE));
-        PrintAndLogEx(DEBUG, _YELLOW_("%2d") " - %s", *pkeycnt + i, sprint_hex(*pkeyBlock + (*pkeycnt + i) * MIFARE_KEY_SIZE, MIFARE_KEY_SIZE));
-    }
-    *pkeycnt += ARRAYLEN(g_mifare_default_keys);
-    PrintAndLogEx(SUCCESS, "loaded " _GREEN_("%zu") " keys from hardcoded default array", ARRAYLEN(g_mifare_default_keys));
-
 
     // Handle user supplied dictionary file
     if (fnlen > 0) {
         uint32_t loaded_numKeys = 0;
         uint8_t *keyBlock_tmp = NULL;
         int res = loadFileDICTIONARY_safe(filename, (void **) &keyBlock_tmp, MIFARE_KEY_SIZE, &loaded_numKeys);
-        if (res != PM3_SUCCESS || loaded_numKeys == 0 || *pkeyBlock == NULL) {
+        if (res != PM3_SUCCESS || loaded_numKeys == 0 || keyBlock_tmp == NULL) {
             PrintAndLogEx(FAILED, "An error occurred while loading the dictionary!");
             free(keyBlock_tmp);
             free(*pkeyBlock);
@@ -882,44 +883,39 @@ static int CmdHF14AMfDarkside(const char *Cmd) {
         arg_param_begin,
         arg_int0(NULL, "blk", "<dec> ", "Target block"),
         arg_lit0("b", NULL, "Target key B instead of default key A"),
+        arg_int0("c", NULL, "<dec>", "Target key type is key A + offset"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
 
-    uint8_t blockno = arg_get_u32_def(ctx, 1, 0);
-
-    uint8_t key_type = MIFARE_AUTH_KEYA;
+    uint8_t blockno = arg_get_u32_def(ctx, 1, 0) & 0xFF;
+    uint8_t key_type = MF_KEY_A;
 
     if (arg_get_lit(ctx, 2)) {
         PrintAndLogEx(INFO, "Targeting key B");
-        key_type = MIFARE_AUTH_KEYB;
+        key_type = MF_KEY_B;
     }
+
+    uint8_t prev_keytype = key_type;
+    key_type = arg_get_int_def(ctx, 3, key_type);
+    if (arg_get_lit(ctx, 2) && (key_type != prev_keytype)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single target key type");
+        return PM3_EINVARG;
+    }
+    // mf_dark_side expects the full command byte 0x6x
+    key_type += MIFARE_AUTH_KEYA;
 
     CLIParserFree(ctx);
 
     uint64_t key = 0;
     uint64_t t1 = msclock();
-    int isOK = mfDarkside(blockno, key_type, &key);
+    int ret = mf_dark_side(blockno, key_type, &key);
     t1 = msclock() - t1;
 
-    switch (isOK) {
-        case PM3_EOPABORTED:
-            PrintAndLogEx(WARNING, "button pressed or aborted via keyboard. aborted");
-            return PM3_EOPABORTED;
-        case -2 :
-            PrintAndLogEx(FAILED, "card is not vulnerable to Darkside attack (doesn't send NACK on authentication requests)");
-            return PM3_ESOFT;
-        case -3 :
-            PrintAndLogEx(FAILED, "card is not vulnerable to Darkside attack (its random number generator is not predictable)");
-            return PM3_ESOFT;
-        case -4 :
-            PrintAndLogEx(FAILED, "card is not vulnerable to Darkside attack (its random number generator seems to be based on the wellknown");
-            PrintAndLogEx(FAILED, "generating polynomial with 16 effective bits only, but shows unexpected behaviour");
-            return PM3_ESOFT;
-        default :
-            PrintAndLogEx(SUCCESS, "found valid key: "_GREEN_("%012" PRIx64), key);
-            break;
-    }
+    if (ret != PM3_SUCCESS) return ret;
+
+    PrintAndLogEx(SUCCESS, "found valid key: " _GREEN_("%012" PRIx64), key);
     PrintAndLogEx(SUCCESS, "time in darkside " _YELLOW_("%.0f") " seconds\n", (float)t1 / 1000.0);
     return PM3_SUCCESS;
 }
@@ -945,6 +941,7 @@ static int CmdHF14AMfWrBl(const char *Cmd) {
         arg_int1(NULL, "blk", "<dec>", "block number"),
         arg_lit0("a", NULL, "input key type is key A (def)"),
         arg_lit0("b", NULL, "input key type is key B"),
+        arg_int0("c", NULL, "<dec>", "input key type is key A + offset"),
         arg_lit0(NULL, "force", "override warnings"),
         arg_str0("k", "key", "<hex>", "key, 6 hex bytes"),
         arg_str0("d", "data", "<hex>", "bytes to write, 16 hex bytes"),
@@ -957,21 +954,27 @@ static int CmdHF14AMfWrBl(const char *Cmd) {
     uint8_t keytype = MF_KEY_A;
     if (arg_get_lit(ctx, 2) && arg_get_lit(ctx, 3)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single input key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 3)) {
-        keytype = MF_KEY_B;;
+        keytype = MF_KEY_B;
     }
-
-    bool force = arg_get_lit(ctx, 4);
+    uint8_t prev_keytype = keytype;
+    keytype = arg_get_int_def(ctx, 4, keytype);
+    if ((arg_get_lit(ctx, 2) || arg_get_lit(ctx, 3)) && (keytype != prev_keytype)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single input key type");
+        return PM3_EINVARG;
+    }
+    bool force = arg_get_lit(ctx, 5);
 
     int keylen = 0;
     uint8_t key[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    CLIGetHexWithReturn(ctx, 5, key, &keylen);
+    CLIGetHexWithReturn(ctx, 6, key, &keylen);
 
     uint8_t block[MFBLOCK_SIZE] = {0x00};
     int blen = 0;
-    CLIGetHexWithReturn(ctx, 6, block, &blen);
+    CLIGetHexWithReturn(ctx, 7, block, &blen);
     CLIParserFree(ctx);
 
     if (keylen && keylen != 6) {
@@ -1004,7 +1007,12 @@ static int CmdHF14AMfWrBl(const char *Cmd) {
         return PM3_EINVARG;
     }
 
-    PrintAndLogEx(INFO, "Writing block no %d, key %c - %s", blockno, (keytype == MF_KEY_B) ? 'B' : 'A', sprint_hex_inrow(key, sizeof(key)));
+    if (keytype < 2) {
+        PrintAndLogEx(INFO, "Writing block no %d, key type:%c - %s", blockno, (keytype == MF_KEY_B) ? 'B' : 'A', sprint_hex_inrow(key, sizeof(key)));
+    } else {
+        PrintAndLogEx(INFO, "Writing block no %d, key type:%02x - %s", blockno, MIFARE_AUTH_KEYA + keytype, sprint_hex_inrow(key, sizeof(key)));
+    }
+
     PrintAndLogEx(INFO, "data: %s", sprint_hex(block, sizeof(block)));
 
     uint8_t data[26];
@@ -1015,7 +1023,7 @@ static int CmdHF14AMfWrBl(const char *Cmd) {
 
     PacketResponseNG resp;
     if (WaitForResponseTimeout(CMD_ACK, &resp, 1500) == false) {
-        PrintAndLogEx(FAILED, "Command execute timeout");
+        PrintAndLogEx(FAILED, "command execution time out");
         return PM3_ETIMEOUT;
     }
 
@@ -1046,6 +1054,7 @@ static int CmdHF14AMfRdBl(const char *Cmd) {
         arg_int1(NULL, "blk", "<dec>", "block number"),
         arg_lit0("a", NULL, "input key type is key A (def)"),
         arg_lit0("b", NULL, "input key type is key B"),
+        arg_int0("c", NULL, "<dec>", "input key type is key A + offset"),
         arg_str0("k", "key", "<hex>", "key, 6 hex bytes"),
         arg_lit0("v", "verbose", "verbose output"),
         arg_param_end
@@ -1056,16 +1065,24 @@ static int CmdHF14AMfRdBl(const char *Cmd) {
     uint8_t keytype = MF_KEY_A;
     if (arg_get_lit(ctx, 2) && arg_get_lit(ctx, 3)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single input key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 3)) {
         keytype = MF_KEY_B;
     }
+    keytype = arg_get_int_def(ctx, 4, keytype);
+    uint8_t prev_keytype = keytype;
+    keytype = arg_get_int_def(ctx, 4, keytype);
+    if ((arg_get_lit(ctx, 2) || arg_get_lit(ctx, 3)) && (keytype != prev_keytype)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single input key type");
+        return PM3_EINVARG;
+    }
 
     int keylen = 0;
     uint8_t key[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    CLIGetHexWithReturn(ctx, 4, key, &keylen);
-    bool verbose = arg_get_lit(ctx, 5);
+    CLIGetHexWithReturn(ctx, 5, key, &keylen);
+    bool verbose = arg_get_lit(ctx, 6);
     CLIParserFree(ctx);
 
     if (keylen && keylen != 6) {
@@ -1079,7 +1096,7 @@ static int CmdHF14AMfRdBl(const char *Cmd) {
     uint8_t blockno = (uint8_t)b;
 
     uint8_t data[16] = {0};
-    int res =  mfReadBlock(blockno, keytype, key, data);
+    int res =  mf_read_block(blockno, keytype, key, data);
     if (res == PM3_SUCCESS) {
 
         uint8_t sector = mfSectorNum(blockno);
@@ -1105,6 +1122,7 @@ static int CmdHF14AMfRdSc(const char *Cmd) {
         arg_param_begin,
         arg_lit0("a", NULL, "input key specified is A key (def)"),
         arg_lit0("b", NULL, "input key specified is B key"),
+        arg_int0("c", NULL, "<dec>", "input key type is key A + offset"),
         arg_str0("k", "key", "<hex>", "key specified as 6 hex bytes"),
         arg_int1("s", "sec", "<dec>", "sector number"),
         arg_lit0("v", "verbose", "verbose output"),
@@ -1114,18 +1132,25 @@ static int CmdHF14AMfRdSc(const char *Cmd) {
     uint8_t keytype = MF_KEY_A;
     if (arg_get_lit(ctx, 1) && arg_get_lit(ctx, 2)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single input key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 2)) {
         keytype = MF_KEY_B;
     }
+    uint8_t prev_keytype = keytype;
+    keytype = arg_get_int_def(ctx, 3, keytype);
+    if ((arg_get_lit(ctx, 1) || arg_get_lit(ctx, 2)) && (keytype != prev_keytype)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single input key type");
+        return PM3_EINVARG;
+    }
 
     int keylen = 0;
     uint8_t key[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    CLIGetHexWithReturn(ctx, 3, key, &keylen);
+    CLIGetHexWithReturn(ctx, 4, key, &keylen);
 
-    int s = arg_get_int_def(ctx, 4, 0);
-    bool verbose = arg_get_lit(ctx, 5);
+    int s = arg_get_int_def(ctx, 5, 0);
+    bool verbose = arg_get_lit(ctx, 6);
     CLIParserFree(ctx);
 
     if (keylen && keylen != 6) {
@@ -1147,7 +1172,7 @@ static int CmdHF14AMfRdSc(const char *Cmd) {
         return PM3_EMALLOC;
     }
 
-    int res =  mfReadSector(sector, keytype, key, data);
+    int res =  mf_read_sector(sector, keytype, key, data);
     if (res == PM3_SUCCESS) {
 
         uint8_t blocks = mfNumBlocksPerSector(sector);
@@ -1168,7 +1193,17 @@ static int CmdHF14AMfRdSc(const char *Cmd) {
 }
 
 static int FastDumpWithEcFill(uint8_t numsectors) {
-    PacketResponseNG resp;
+
+    uint8_t dbg_curr = DBG_NONE;
+    if (getDeviceDebugLevel(&dbg_curr) != PM3_SUCCESS) {
+        return PM3_EFAILED;
+    }
+
+    /*
+    if (setDeviceDebugLevel(DBG_NONE, false) != PM3_SUCCESS) {
+        return PM3_EFAILED;
+    }
+    */
 
     mfc_eload_t payload;
     payload.sectorcnt = numsectors;
@@ -1178,9 +1213,10 @@ static int FastDumpWithEcFill(uint8_t numsectors) {
     clearCommandBuffer();
     SendCommandNG(CMD_HF_MIFARE_EML_LOAD, (uint8_t *)&payload, sizeof(payload));
 
+    PacketResponseNG resp;
     bool res = WaitForResponseTimeout(CMD_HF_MIFARE_EML_LOAD, &resp, 2500);
     if (res == false) {
-        PrintAndLogEx(WARNING, "Command execute timeout");
+        PrintAndLogEx(WARNING, "command execution time out");
         return PM3_ETIMEOUT;
     }
 
@@ -1194,7 +1230,8 @@ static int FastDumpWithEcFill(uint8_t numsectors) {
         SendCommandNG(CMD_HF_MIFARE_EML_LOAD, (uint8_t *)&payload, sizeof(payload));
         res = WaitForResponseTimeout(CMD_HF_MIFARE_EML_LOAD, &resp, 2500);
         if (res == false) {
-            PrintAndLogEx(WARNING, "Command execute timeout");
+            PrintAndLogEx(WARNING, "command execution time out");
+            setDeviceDebugLevel(dbg_curr, false);
             return PM3_ETIMEOUT;
         }
 
@@ -1203,6 +1240,11 @@ static int FastDumpWithEcFill(uint8_t numsectors) {
             PrintAndLogEx(FAILED, "Dump file is " _RED_("PARTIAL") " complete");
         }
     }
+
+    if (setDeviceDebugLevel(dbg_curr, false) != PM3_SUCCESS) {
+        return PM3_EFAILED;
+    }
+
     return PM3_SUCCESS;
 }
 
@@ -1488,9 +1530,9 @@ static int CmdHF14AMfRestore(const char *Cmd) {
             uint8_t bldata[MFBLOCK_SIZE] = {0x00};
             memcpy(bldata, dump, MFBLOCK_SIZE);
 
+            bool skip = false;
             // if sector trailer
             if (mfIsSectorTrailerBasedOnBlocks(s, b)) {
-
                 // keep the current keys on the card
                 if (use_keyfile_for_auth == false) {
                     // replace KEY A
@@ -1514,7 +1556,7 @@ static int CmdHF14AMfRestore(const char *Cmd) {
                         // if --force isn't used, skip writing this block
                         if (force == false) {
                             PrintAndLogEx(INFO, "Skipping,  use `" _YELLOW_("--force") "` to override and write this data");
-                            continue;
+                            skip = true;
                         }
                     }
                 }
@@ -1523,6 +1565,9 @@ static int CmdHF14AMfRestore(const char *Cmd) {
             if (bytes_read) {
                 dump += MFBLOCK_SIZE;
                 bytes_read -= MFBLOCK_SIZE;
+            }
+            if (skip) {
+                continue;
             }
 
             uint8_t wdata[26];
@@ -1548,7 +1593,7 @@ static int CmdHF14AMfRestore(const char *Cmd) {
                 SendCommandMIX(CMD_HF_MIFARE_WRITEBL, blockno, kt, 0, wdata, sizeof(wdata));
                 PacketResponseNG resp;
                 if (WaitForResponseTimeout(CMD_ACK, &resp, 1500) == false) {
-                    PrintAndLogEx(WARNING, "Command execute timeout");
+                    PrintAndLogEx(WARNING, "command execution time out");
                     continue;
                 }
 
@@ -1560,7 +1605,7 @@ static int CmdHF14AMfRestore(const char *Cmd) {
                 }
                 // write somehow failed.  Lets determine why.
                 if (isOK == PM3_ETEAROFF) {
-                    PrintAndLogEx(INFO, "Tear off triggerd. Recommendation is not to use tear-off with restore command");
+                    PrintAndLogEx(INFO, "Tear off triggered. Recommendation is not to use tear-off with restore command");
                     goto out;
                 }
 
@@ -1604,12 +1649,15 @@ static int CmdHF14AMfNested(const char *Cmd) { //TODO: single mode broken? can't
         arg_int0(NULL, "blk", "<dec>", "Input block number"),
         arg_lit0("a", NULL, "Input key specified is A key (default)"),
         arg_lit0("b", NULL, "Input key specified is B key"),
+        arg_int0("c", NULL, "<dec>", "input key type is key A + offset"),
         arg_int0(NULL, "tblk", "<dec>", "Target block number"),
         arg_lit0(NULL, "ta", "Target A key (default)"),
         arg_lit0(NULL, "tb", "Target B key"),
+        arg_int0(NULL, "tc", "<dec>", "Nested input key type is key A + offset (you must specify a single block as well!)"),
         arg_lit0(NULL, "emu", "Fill simulator keys from found keys"),
         arg_lit0(NULL, "dump", "Dump found keys to file"),
         arg_lit0(NULL, "mem", "Use dictionary from flashmemory"),
+        arg_lit0("i", NULL, "Ignore static encrypted nonces"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
@@ -1629,28 +1677,42 @@ static int CmdHF14AMfNested(const char *Cmd) { //TODO: single mode broken? can't
 
     if (arg_get_lit(ctx, 7) && arg_get_lit(ctx, 8)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single input key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 8)) {
         keyType = MF_KEY_B;
     }
+    uint8_t prev_keytype = keyType;
+    keyType = arg_get_int_def(ctx, 9, keyType);
+    if ((arg_get_lit(ctx, 7) || arg_get_lit(ctx, 8)) && (keyType != prev_keytype)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single input key type");
+        return PM3_EINVARG;
+    }
 
-    int trgBlockNo = arg_get_int_def(ctx, 9, -1);
+    int trgBlockNo = arg_get_int_def(ctx, 10, -1);
 
     uint8_t trgKeyType = MF_KEY_A;
 
-    if (arg_get_lit(ctx, 10) && arg_get_lit(ctx, 11)) {
+    if (arg_get_lit(ctx, 11) && arg_get_lit(ctx, 12)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Target key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single target key type");
         return PM3_EINVARG;
-    } else if (arg_get_lit(ctx, 11)) {
+    } else if (arg_get_lit(ctx, 12)) {
         trgKeyType = MF_KEY_B;
     }
-
-    bool transferToEml = arg_get_lit(ctx, 12);
-    bool createDumpFile = arg_get_lit(ctx, 13);
+    uint8_t prev_trgkeytype = trgKeyType;
+    trgKeyType = arg_get_int_def(ctx, 13, trgKeyType);
+    if ((arg_get_lit(ctx, 11) || arg_get_lit(ctx, 12)) && (trgKeyType != prev_trgkeytype)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single target key type");
+        return PM3_EINVARG;
+    }
+    bool transferToEml = arg_get_lit(ctx, 14);
+    bool createDumpFile = arg_get_lit(ctx, 15);
     bool singleSector = trgBlockNo > -1;
-    bool use_flashmemory = arg_get_lit(ctx, 14);
+    bool use_flashmemory = arg_get_lit(ctx, 16);
+    bool ignore_static_encrypted = arg_get_lit(ctx, 17);
 
     CLIParserFree(ctx);
 
@@ -1715,16 +1777,20 @@ static int CmdHF14AMfNested(const char *Cmd) { //TODO: single mode broken? can't
     }
 
     // check if we can authenticate to sector
-    if (mfCheckKeys(blockNo, keyType, true, 1, key, &key64) != PM3_SUCCESS) {
-        PrintAndLogEx(WARNING, "Wrong key. Can't authenticate to block:%3d key type:%c", blockNo, keyType ? 'B' : 'A');
+    if (mf_check_keys(blockNo, keyType, true, 1, key, &key64) != PM3_SUCCESS) {
+        if (keyType < 2) {
+            PrintAndLogEx(WARNING, "Wrong key. Can't authenticate to block:%3d key type:%c", blockNo, keyType ? 'B' : 'A');
+        } else {
+            PrintAndLogEx(WARNING, "Wrong key. Can't authenticate to block:%3d key type:%02x", blockNo, MIFARE_AUTH_KEYA + keyType);
+        }
         return PM3_EOPABORTED;
     }
 
     if (singleSector) {
-        int16_t isOK = mfnested(blockNo, keyType, key, trgBlockNo, trgKeyType, keyBlock, true);
+        int16_t isOK = mf_nested(blockNo, keyType, key, trgBlockNo, trgKeyType, keyBlock, !ignore_static_encrypted);
         switch (isOK) {
             case PM3_ETIMEOUT:
-                PrintAndLogEx(ERR, "Command execute timeout\n");
+                PrintAndLogEx(ERR, "command execution time out\n");
                 break;
             case PM3_EOPABORTED:
                 PrintAndLogEx(WARNING, "Button pressed. Aborted\n");
@@ -1750,14 +1816,14 @@ static int CmdHF14AMfNested(const char *Cmd) { //TODO: single mode broken? can't
                     } else {                    // 16 block sector
                         sectortrailer = trgBlockNo | 0x0f;
                     }
-                    mfEmlGetMem(keyBlock, sectortrailer, 1);
+                    mf_eml_get_mem(keyBlock, sectortrailer, 1);
 
                     if (trgKeyType == MF_KEY_A)
                         num_to_bytes(key64, 6, keyBlock);
                     else
                         num_to_bytes(key64, 6, &keyBlock[10]);
 
-                    mfEmlSetMem(keyBlock, sectortrailer, 1);
+                    mf_elm_set_mem(keyBlock, sectortrailer, 1);
                     PrintAndLogEx(SUCCESS, "Key transferred to emulator memory.");
                 }
                 return PM3_SUCCESS;
@@ -1785,7 +1851,7 @@ static int CmdHF14AMfNested(const char *Cmd) { //TODO: single mode broken? can't
         }
 
         PrintAndLogEx(SUCCESS, "Testing known keys. Sector count "_YELLOW_("%d"), SectorsCnt);
-        int res = mfCheckKeys_fast(SectorsCnt, true, true, 1, ARRAYLEN(g_mifare_default_keys) + 1, keyBlock, e_sector, use_flashmemory, false);
+        int res = mf_check_keys_fast(SectorsCnt, true, true, 1, ARRAYLEN(g_mifare_default_keys) + 1, keyBlock, e_sector, use_flashmemory, false);
         if (res == PM3_SUCCESS) {
             PrintAndLogEx(SUCCESS, "Fast check found all keys");
             goto jumptoend;
@@ -1796,7 +1862,7 @@ static int CmdHF14AMfNested(const char *Cmd) { //TODO: single mode broken? can't
         PrintAndLogEx(SUCCESS, "enter nested key recovery");
 
         // nested sectors
-        bool calibrate = true;
+        bool calibrate = !ignore_static_encrypted;
 
         for (trgKeyType = MF_KEY_A; trgKeyType <= MF_KEY_B; ++trgKeyType) {
             for (uint8_t sectorNo = 0; sectorNo < SectorsCnt; ++sectorNo) {
@@ -1804,10 +1870,10 @@ static int CmdHF14AMfNested(const char *Cmd) { //TODO: single mode broken? can't
 
                     if (e_sector[sectorNo].foundKey[trgKeyType]) continue;
 
-                    int16_t isOK = mfnested(blockNo, keyType, key, mfFirstBlockOfSector(sectorNo), trgKeyType, keyBlock, calibrate);
+                    int16_t isOK = mf_nested(blockNo, keyType, key, mfFirstBlockOfSector(sectorNo), trgKeyType, keyBlock, calibrate);
                     switch (isOK) {
                         case PM3_ETIMEOUT:
-                            PrintAndLogEx(ERR, "Command execute timeout\n");
+                            PrintAndLogEx(ERR, "command execution time out\n");
                             break;
                         case PM3_EOPABORTED:
                             PrintAndLogEx(WARNING, "button pressed. Aborted\n");
@@ -1827,7 +1893,7 @@ static int CmdHF14AMfNested(const char *Cmd) { //TODO: single mode broken? can't
                             e_sector[sectorNo].foundKey[trgKeyType] = 1;
                             e_sector[sectorNo].Key[trgKeyType] = bytes_to_num(keyBlock, 6);
 
-                            mfCheckKeys_fast(SectorsCnt, true, true, 2, 1, keyBlock, e_sector, false, false);
+                            mf_check_keys_fast(SectorsCnt, true, true, 2, 1, keyBlock, e_sector, false, false);
                             continue;
                         default :
                             PrintAndLogEx(ERR, "Unknown error\n");
@@ -1889,7 +1955,7 @@ jumptoend:
             // fast push mode
             g_conn.block_after_ACK = true;
             for (int i = 0; i < SectorsCnt; i++) {
-                mfEmlGetMem(keyBlock, mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1, 1);
+                mf_eml_get_mem(keyBlock, mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1, 1);
 
                 if (e_sector[i].foundKey[0])
                     num_to_bytes(e_sector[i].Key[0], 6, keyBlock);
@@ -1901,7 +1967,7 @@ jumptoend:
                     // Disable fast mode on last packet
                     g_conn.block_after_ACK = false;
                 }
-                mfEmlSetMem(keyBlock, mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1, 1);
+                mf_elm_set_mem(keyBlock, mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1, 1);
             }
             PrintAndLogEx(SUCCESS, "keys transferred to emulator memory.");
         }
@@ -1963,7 +2029,7 @@ static int CmdHF14AMfNestedStatic(const char *Cmd) {
 
     if (arg_get_lit(ctx, 7) && arg_get_lit(ctx, 8)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single input key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 8)) {
         keyType = MF_KEY_B;
@@ -2013,8 +2079,12 @@ static int CmdHF14AMfNestedStatic(const char *Cmd) {
     }
 
     // check if we can authenticate to sector
-    if (mfCheckKeys(blockNo, keyType, true, 1, key, &key64) != PM3_SUCCESS) {
-        PrintAndLogEx(WARNING, "Wrong key. Can't authenticate to block: %3d key type: %c", blockNo, keyType ? 'B' : 'A');
+    if (mf_check_keys(blockNo, keyType, true, 1, key, &key64) != PM3_SUCCESS) {
+        if (keyType < 2) {
+            PrintAndLogEx(WARNING, "Wrong key. Can't authenticate to block:%3d key type:%c", blockNo, keyType ? 'B' : 'A');
+        } else {
+            PrintAndLogEx(WARNING, "Wrong key. Can't authenticate to block:%3d key type:%02x", blockNo, MIFARE_AUTH_KEYA + keyType);
+        }
         return PM3_EOPABORTED;
     }
 
@@ -2041,7 +2111,7 @@ static int CmdHF14AMfNestedStatic(const char *Cmd) {
     }
 
     PrintAndLogEx(SUCCESS, "Testing known keys. Sector count "_YELLOW_("%d"), SectorsCnt);
-    int res = mfCheckKeys_fast(SectorsCnt, true, true, 1, ARRAYLEN(g_mifare_default_keys) + 1, keyBlock, e_sector, false, false);
+    int res = mf_check_keys_fast(SectorsCnt, true, true, 1, ARRAYLEN(g_mifare_default_keys) + 1, keyBlock, e_sector, false, false);
     if (res == PM3_SUCCESS) {
         // all keys found
         PrintAndLogEx(SUCCESS, "Fast check found all keys");
@@ -2060,10 +2130,10 @@ static int CmdHF14AMfNestedStatic(const char *Cmd) {
 
                 if (e_sector[sectorNo].foundKey[trgKeyType]) continue;
 
-                int16_t isOK = mfStaticNested(blockNo, keyType, key, mfFirstBlockOfSector(sectorNo), trgKeyType, keyBlock);
+                int16_t isOK = mf_static_nested(blockNo, keyType, key, mfFirstBlockOfSector(sectorNo), trgKeyType, keyBlock);
                 switch (isOK) {
                     case PM3_ETIMEOUT :
-                        PrintAndLogEx(ERR, "Command execute timeout");
+                        PrintAndLogEx(ERR, "command execution time out");
                         break;
                     case PM3_EOPABORTED :
                         PrintAndLogEx(WARNING, "aborted via keyboard.");
@@ -2138,7 +2208,7 @@ jumptoend:
         // fast push mode
         g_conn.block_after_ACK = true;
         for (int i = 0; i < SectorsCnt; i++) {
-            mfEmlGetMem(keyBlock, mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1, 1);
+            mf_eml_get_mem(keyBlock, mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1, 1);
 
             if (e_sector[i].foundKey[0])
                 num_to_bytes(e_sector[i].Key[0], 6, keyBlock);
@@ -2150,7 +2220,7 @@ jumptoend:
                 // Disable fast mode on last packet
                 g_conn.block_after_ACK = false;
             }
-            mfEmlSetMem(keyBlock, mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1, 1);
+            mf_elm_set_mem(keyBlock, mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1, 1);
         }
         PrintAndLogEx(SUCCESS, "keys transferred to emulator memory.");
     }
@@ -2237,7 +2307,7 @@ static int CmdHF14AMfNestedHard(const char *Cmd) {
     uint8_t keytype = MF_KEY_A;
     if (arg_get_lit(ctx, 3) && arg_get_lit(ctx, 4)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single input key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 4)) {
         keytype = MF_KEY_B;
@@ -2248,7 +2318,7 @@ static int CmdHF14AMfNestedHard(const char *Cmd) {
     uint8_t trg_keytype = MF_KEY_A;
     if (arg_get_lit(ctx, 6) && arg_get_lit(ctx, 7)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single target key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 7)) {
         trg_keytype = MF_KEY_B;
@@ -2357,8 +2427,12 @@ static int CmdHF14AMfNestedHard(const char *Cmd) {
 
             uint64_t key64 = 0;
             // check if we can authenticate to sector
-            if (mfCheckKeys(blockno, keytype, true, 1, key, &key64) != PM3_SUCCESS) {
-                PrintAndLogEx(WARNING, "Key is wrong. Can't authenticate to block: %3d  key type: %c", blockno, (keytype == MF_KEY_B) ? 'B' : 'A');
+            if (mf_check_keys(blockno, keytype, true, 1, key, &key64) != PM3_SUCCESS) {
+                if (keytype < 2) {
+                    PrintAndLogEx(WARNING, "Wrong key. Can't authenticate to block:%3d key type:%c", blockno, keytype ? 'B' : 'A');
+                } else {
+                    PrintAndLogEx(WARNING, "Wrong key. Can't authenticate to block:%3d key type:%02x", blockno, MIFARE_AUTH_KEYA + keytype);
+                }
                 return PM3_EWRONGANSWER;
             }
         }
@@ -2426,6 +2500,8 @@ static int CmdHF14AMfAutoPWN(const char *Cmd) {
         arg_lit0("l",  "legacy",          "legacy mode (use the slow `hf mf chk`)"),
         arg_lit0("v",  "verbose",         "verbose output"),
 
+        arg_lit0(NULL, "ns", "No save to file"),
+
         arg_lit0(NULL, "mini", "MIFARE Classic Mini / S20"),
         arg_lit0(NULL, "1k", "MIFARE Classic 1k / S50 (default)"),
         arg_lit0(NULL, "2k", "MIFARE Classic/Plus 2k"),
@@ -2457,7 +2533,7 @@ static int CmdHF14AMfAutoPWN(const char *Cmd) {
     uint8_t keytype = MF_KEY_A;
     if (arg_get_lit(ctx, 3) && arg_get_lit(ctx, 4)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single input key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 4)) {
         keytype = MF_KEY_B;
@@ -2471,23 +2547,25 @@ static int CmdHF14AMfAutoPWN(const char *Cmd) {
     bool legacy_mfchk = arg_get_lit(ctx, 7);
     bool verbose = arg_get_lit(ctx, 8);
 
-    bool m0 = arg_get_lit(ctx, 9);
-    bool m1 = arg_get_lit(ctx, 10);
-    bool m2 = arg_get_lit(ctx, 11);
-    bool m4 = arg_get_lit(ctx, 12);
+    bool no_save = arg_get_lit(ctx, 9);
 
-    bool in = arg_get_lit(ctx, 13);
+    bool m0 = arg_get_lit(ctx, 10);
+    bool m1 = arg_get_lit(ctx, 11);
+    bool m2 = arg_get_lit(ctx, 12);
+    bool m4 = arg_get_lit(ctx, 13);
+
+    bool in = arg_get_lit(ctx, 14);
 #if defined(COMPILER_HAS_SIMD_X86)
-    bool im = arg_get_lit(ctx, 14);
-    bool is = arg_get_lit(ctx, 15);
-    bool ia = arg_get_lit(ctx, 16);
-    bool i2 = arg_get_lit(ctx, 17);
+    bool im = arg_get_lit(ctx, 15);
+    bool is = arg_get_lit(ctx, 16);
+    bool ia = arg_get_lit(ctx, 17);
+    bool i2 = arg_get_lit(ctx, 18);
 #endif
 #if defined(COMPILER_HAS_SIMD_AVX512)
-    bool i5 = arg_get_lit(ctx, 18);
+    bool i5 = arg_get_lit(ctx, 19);
 #endif
 #if defined(COMPILER_HAS_SIMD_NEON)
-    bool ie = arg_get_lit(ctx, 14);
+    bool ie = arg_get_lit(ctx, 15);
 #endif
 
     CLIParserFree(ctx);
@@ -2701,7 +2779,7 @@ static int CmdHF14AMfAutoPWN(const char *Cmd) {
     // Start the timer
     uint64_t t1 = msclock();
 
-    int ret = mf_load_keys(&keyBlock, &key_cnt, in_keys, in_keys_len, filename, fnlen);
+    int ret = mf_load_keys(&keyBlock, &key_cnt, in_keys, in_keys_len, filename, fnlen, true);
     if (ret != PM3_SUCCESS) {
         free(e_sector);
         return ret;
@@ -2723,7 +2801,7 @@ static int CmdHF14AMfAutoPWN(const char *Cmd) {
                         PrintAndLogEx(NORMAL, "." NOLF);
                         fflush(stdout);
 
-                        if (mfCheckKeys(mfFirstBlockOfSector(i), j, true, 1, (keyBlock + (MIFARE_KEY_SIZE * k)), &key64) == PM3_SUCCESS) {
+                        if (mf_check_keys(mfFirstBlockOfSector(i), j, true, 1, (keyBlock + (MIFARE_KEY_SIZE * k)), &key64) == PM3_SUCCESS) {
                             e_sector[i].Key[j] = bytes_to_num((keyBlock + (MIFARE_KEY_SIZE * k)), MIFARE_KEY_SIZE);
                             e_sector[i].foundKey[j] = 'D';
                             break;
@@ -2755,7 +2833,7 @@ static int CmdHF14AMfAutoPWN(const char *Cmd) {
                     lastChunk = true;
                 }
 
-                res = mfCheckKeys_fast(sector_cnt, firstChunk, lastChunk, strategy, size, keyBlock + (i * MIFARE_KEY_SIZE), e_sector, false, verbose);
+                res = mf_check_keys_fast(sector_cnt, firstChunk, lastChunk, strategy, size, keyBlock + (i * MIFARE_KEY_SIZE), e_sector, false, verbose);
                 if (firstChunk) {
                     firstChunk = false;
                 }
@@ -2817,26 +2895,15 @@ static int CmdHF14AMfAutoPWN(const char *Cmd) {
             if (verbose) {
                 PrintAndLogEx(INFO, "======================= " _YELLOW_("START DARKSIDE ATTACK") " =======================");
             }
-            isOK = mfDarkside(mfFirstBlockOfSector(sectorno), MIFARE_AUTH_KEYA + keytype, &key64);
 
-            switch (isOK) {
-                case PM3_EOPABORTED :
-                    PrintAndLogEx(WARNING, "\nButton pressed or aborted via keyboard");
-                    goto noValidKeyFound;
-                case -2 :
-                    PrintAndLogEx(FAILED, "\nCard is not vulnerable to Darkside attack (doesn't send NACK on authentication requests).");
-                    goto noValidKeyFound;
-                case -3 :
-                    PrintAndLogEx(FAILED, "\nCard is not vulnerable to Darkside attack (its random number generator is not predictable).");
-                    goto noValidKeyFound;
-                case -4 :
-                    PrintAndLogEx(FAILED, "\nCard is not vulnerable to Darkside attack (its random number generator seems to be based on the wellknown");
-                    PrintAndLogEx(FAILED, "generating polynomial with 16 effective bits only, but shows unexpected behaviour.");
-                    goto noValidKeyFound;
-                default :
-                    PrintAndLogEx(SUCCESS, "\nFound valid key [ " _GREEN_("%012" PRIx64) " ]\n", key64);
-                    break;
-            }
+            PrintAndLogEx(NORMAL, "");
+
+            isOK = mf_dark_side(mfFirstBlockOfSector(sectorno), MIFARE_AUTH_KEYA + keytype, &key64);
+
+            if (isOK != PM3_SUCCESS)
+                goto noValidKeyFound;
+
+            PrintAndLogEx(SUCCESS, "Found valid key [ " _GREEN_("%012" PRIx64) " ]\n", key64);
 
             // Store the keys
             num_to_bytes(key64, MIFARE_KEY_SIZE, key);
@@ -2885,7 +2952,7 @@ noValidKeyFound:
                                 continue;
 
                             // Check if the key works
-                            if (mfCheckKeys(mfFirstBlockOfSector(i), j, true, 1, tmp_key, &key64) == PM3_SUCCESS) {
+                            if (mf_check_keys(mfFirstBlockOfSector(i), j, true, 1, tmp_key, &key64) == PM3_SUCCESS) {
                                 e_sector[i].Key[j] = bytes_to_num(tmp_key, MIFARE_KEY_SIZE);
                                 e_sector[i].foundKey[j] = 'R';
                                 PrintAndLogEx(SUCCESS, "target sector %3u key type %c -- found valid key [ " _GREEN_("%s") " ]",
@@ -2964,7 +3031,7 @@ skipReadBKey:
                                           (current_key_type_i == MF_KEY_B) ? 'B' : 'A');
                         }
 tryNested:
-                        isOK = mfnested(mfFirstBlockOfSector(sectorno), keytype, key, mfFirstBlockOfSector(current_sector_i), current_key_type_i, tmp_key, calibrate);
+                        isOK = mf_nested(mfFirstBlockOfSector(sectorno), keytype, key, mfFirstBlockOfSector(current_sector_i), current_key_type_i, tmp_key, calibrate);
 
                         switch (isOK) {
                             case PM3_ETIMEOUT: {
@@ -3001,7 +3068,7 @@ tryNested:
                             case PM3_ESTATIC_NONCE: {
                                 PrintAndLogEx(ERR, "Error: Static encrypted nonce detected. Aborted\n");
 
-                                e_sector[current_sector_i].Key[current_key_type_i] = 0xffffffffffff;;
+                                e_sector[current_sector_i].Key[current_key_type_i] = 0xffffffffffff;
                                 e_sector[current_sector_i].foundKey[current_key_type_i] = false;
                                 // Show the results to the user
                                 PrintAndLogEx(NORMAL, "");
@@ -3052,7 +3119,7 @@ tryHardnested: // If the nested attack fails then we try the hardnested attack
                                 case PM3_ESTATIC_NONCE: {
                                     PrintAndLogEx(ERR, "\nError: Static encrypted nonce detected. Aborted\n");
 
-                                    e_sector[current_sector_i].Key[current_key_type_i] = 0xffffffffffff;;
+                                    e_sector[current_sector_i].Key[current_key_type_i] = 0xffffffffffff;
                                     e_sector[current_sector_i].foundKey[current_key_type_i] = false;
 
                                     // Show the results to the user
@@ -3090,7 +3157,7 @@ tryStaticnested:
                                           (current_key_type_i == MF_KEY_B) ? 'B' : 'A');
                         }
 
-                        isOK = mfStaticNested(mfFirstBlockOfSector(sectorno), keytype, key, mfFirstBlockOfSector(current_sector_i), current_key_type_i, tmp_key);
+                        isOK = mf_static_nested(mfFirstBlockOfSector(sectorno), keytype, key, mfFirstBlockOfSector(current_sector_i), current_key_type_i, tmp_key);
                         DropField();
                         switch (isOK) {
                             case PM3_ETIMEOUT: {
@@ -3137,11 +3204,13 @@ all_found:
 
     printKeyTable(sector_cnt, e_sector);
 
-    // Dump the keys
-    PrintAndLogEx(NORMAL, "");
+    if (no_save == false) {
 
-    if (createMfcKeyDump(fptr, sector_cnt, e_sector) != PM3_SUCCESS) {
-        PrintAndLogEx(ERR, "Failed to save keys to file");
+        // Dump the keys
+        PrintAndLogEx(NORMAL, "");
+        if (createMfcKeyDump(fptr, sector_cnt, e_sector) != PM3_SUCCESS) {
+            PrintAndLogEx(ERR, "Failed to save keys to file");
+        }
     }
 
     // clear emulator mem
@@ -3152,13 +3221,13 @@ all_found:
 
     bool transfer_status = true;
     for (current_sector_i = 0; current_sector_i < sector_cnt; current_sector_i++) {
-        mfEmlGetMem(block, current_sector_i, 1);
+        mf_eml_get_mem(block, current_sector_i, 1);
         if (e_sector[current_sector_i].foundKey[0])
             num_to_bytes(e_sector[current_sector_i].Key[0], MIFARE_KEY_SIZE, block);
         if (e_sector[current_sector_i].foundKey[1])
             num_to_bytes(e_sector[current_sector_i].Key[1], MIFARE_KEY_SIZE, block + 10);
 
-        transfer_status |= mfEmlSetMem(block, mfFirstBlockOfSector(current_sector_i) + mfNumBlocksPerSector(current_sector_i) - 1, 1);
+        transfer_status |= mf_elm_set_mem(block, mfFirstBlockOfSector(current_sector_i) + mfNumBlocksPerSector(current_sector_i) - 1, 1);
     }
     PrintAndLogEx(NORMAL, "( %s )", (transfer_status) ? _GREEN_("ok") : _RED_("fail"));
 
@@ -3166,6 +3235,12 @@ all_found:
 
     // use ecfill trick
     FastDumpWithEcFill(sector_cnt);
+
+    if (no_save) {
+        PrintAndLogEx(INFO, "Called with no save option");
+        PrintAndLogEx(NORMAL, "");
+        goto out;
+    }
 
     bytes = block_cnt * MFBLOCK_SIZE;
     uint8_t *dump = calloc(bytes, sizeof(uint8_t));
@@ -3198,12 +3273,13 @@ all_found:
     free(fptr);
 
     pm3_save_mf_dump(filename, dump, bytes, jsfCardMemory);
+    free(dump);
 
+out:
     // Generate and show statistics
     t1 = msclock() - t1;
     PrintAndLogEx(INFO, "autopwn execution time: " _YELLOW_("%.0f") " seconds", (float)t1 / 1000.0);
 
-    free(dump);
     free(e_sector);
     return PM3_SUCCESS;
 }
@@ -3232,6 +3308,10 @@ static int CmdHF14AMfChk_fast(const char *Cmd) {
         arg_lit0(NULL, "dump", "Dump found keys to binary file"),
         arg_lit0(NULL, "mem", "Use dictionary from flashmemory"),
         arg_str0("f", "file", "<fn>", "filename of dictionary"),
+        arg_int0(NULL, "blk", "<dec>", "block number (single block recovery mode)"),
+        arg_lit0("a", NULL, "single block recovery key A"),
+        arg_lit0("b", NULL, "single block recovery key B"),
+        arg_lit0(NULL, "no-default", "Skip check default keys"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -3252,6 +3332,17 @@ static int CmdHF14AMfChk_fast(const char *Cmd) {
     int fnlen = 0;
     char filename[FILE_PATH_SIZE] = {0};
     CLIParamStrToBuf(arg_get_str(ctx, 9), (uint8_t *)filename, FILE_PATH_SIZE, &fnlen);
+
+    int blockn = arg_get_int_def(ctx, 10, -1);
+    uint8_t keytype = MF_KEY_A;
+    if (arg_get_lit(ctx, 11) && arg_get_lit(ctx, 12)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single input key type");
+        return PM3_EINVARG;
+    } else if (arg_get_lit(ctx, 12)) {
+        keytype = MF_KEY_B;
+    }
+    bool load_default = ! arg_get_lit(ctx, 13);
 
     CLIParserFree(ctx);
 
@@ -3280,7 +3371,7 @@ static int CmdHF14AMfChk_fast(const char *Cmd) {
 
     uint8_t *keyBlock = NULL;
     uint32_t keycnt = 0;
-    int ret = mf_load_keys(&keyBlock, &keycnt, key, keylen, filename, fnlen);
+    int ret = mf_load_keys(&keyBlock, &keycnt, key, keylen, filename, fnlen, load_default);
     if (ret != PM3_SUCCESS) {
         return ret;
     }
@@ -3300,12 +3391,16 @@ static int CmdHF14AMfChk_fast(const char *Cmd) {
     // time
     uint64_t t1 = msclock();
 
+    uint16_t singleSectorParams = 0;
+    if (blockn != -1) {
+        singleSectorParams = (blockn & 0xFF) | keytype << 8 | 1 << 15;
+    }
     if (use_flashmemory) {
         PrintAndLogEx(SUCCESS, "Using dictionary in flash memory");
-        mfCheckKeys_fast(sectorsCnt, true, true, 1, 0, keyBlock, e_sector, use_flashmemory, false);
+        mf_check_keys_fast_ex(sectorsCnt, true, true, 1, 0, keyBlock, e_sector, use_flashmemory, false, false, singleSectorParams);
     } else {
 
-        // strategys. 1= deep first on sector 0 AB,  2= width first on all sectors
+        // strategies. 1= deep first on sector 0 AB,  2= width first on all sectors
         for (uint8_t strategy = 1; strategy < 3; strategy++) {
             PrintAndLogEx(INFO, "Running strategy %u", strategy);
 
@@ -3313,33 +3408,48 @@ static int CmdHF14AMfChk_fast(const char *Cmd) {
             for (i = 0; i < keycnt; i += chunksize) {
 
                 if (kbd_enter_pressed()) {
+                    PrintAndLogEx(NORMAL, "");
                     PrintAndLogEx(WARNING, "\naborted via keyboard!\n");
+                    // field is still ON if not on last chunk
+                    clearCommandBuffer();
+                    SendCommandNG(CMD_FPGA_MAJOR_MODE_OFF, NULL, 0);
+                    // TODO: we're missing these cleanups on arm side, not sure if it's important...
+                    // set_tracing(false);
+                    // BigBuf_free();
+                    // BigBuf_Clear_ext(false);
                     goto out;
                 }
-
+                PrintAndLogEx(INPLACE, "Testing %5i/%5i %02.1f%%", i, keycnt, (float)i * 100 / keycnt);
                 uint32_t size = ((keycnt - i)  > chunksize) ? chunksize : keycnt - i;
 
                 // last chunk?
                 if (size == keycnt - i)
                     lastChunk = true;
 
-                int res = mfCheckKeys_fast(sectorsCnt, firstChunk, lastChunk, strategy, size, keyBlock + (i * MIFARE_KEY_SIZE), e_sector, false, false);
-
+                int res = mf_check_keys_fast_ex(sectorsCnt, firstChunk, lastChunk, strategy, size, keyBlock + (i * MIFARE_KEY_SIZE), e_sector, false, false, true, singleSectorParams);
                 if (firstChunk)
                     firstChunk = false;
 
                 // all keys,  aborted
-                if (res == PM3_SUCCESS || res == 2)
+                if (res == PM3_SUCCESS || res == 2) {
+                    PrintAndLogEx(NORMAL, "");
                     goto out;
-
+                }
             } // end chunks of keys
+            PrintAndLogEx(INPLACE, "Testing %5i/%5i 100.00%%", keycnt, keycnt);
+            PrintAndLogEx(NORMAL, "");
             firstChunk = true;
             lastChunk = false;
+            if (blockn != -1) break;
         } // end strategy
     }
 out:
     t1 = msclock() - t1;
-    PrintAndLogEx(INFO, "time in checkkeys (fast) " _YELLOW_("%.1fs") "\n", (float)(t1 / 1000.0));
+    PrintAndLogEx(INFO, "Time in checkkeys (fast) " _YELLOW_("%.1fs") "\n", (float)(t1 / 1000.0));
+
+    if (blockn != -1) {
+        goto out2;
+    }
 
     // check..
     uint8_t found_keys = 0;
@@ -3374,7 +3484,7 @@ out:
             uint8_t block[MFBLOCK_SIZE] = {0x00};
             for (i = 0; i < sectorsCnt; ++i) {
                 uint8_t b = mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1;
-                mfEmlGetMem(block, b, 1);
+                mf_eml_get_mem(block, b, 1);
 
                 if (e_sector[i].foundKey[0])
                     num_to_bytes(e_sector[i].Key[0], MIFARE_KEY_SIZE, block);
@@ -3386,7 +3496,7 @@ out:
                     // Disable fast mode on last packet
                     g_conn.block_after_ACK = false;
                 }
-                mfEmlSetMem(block, b, 1);
+                mf_elm_set_mem(block, b, 1);
             }
             PrintAndLogEx(SUCCESS, "Found keys have been transferred to the emulator memory");
 
@@ -3404,7 +3514,7 @@ out:
             free(fptr);
         }
     }
-
+out2:
     free(keyBlock);
     free(e_sector);
     PrintAndLogEx(NORMAL, "");
@@ -3503,28 +3613,38 @@ static int CmdHF14AMfSmartBrute(const char *Cmd) {
 
         // generate block of keys from generator
         memset(keyBlock, 0, MIFARE_KEY_SIZE * chunksize);
+
         for (i = 0; i < chunksize; i++) {
+
             ret = bf_generate(&bctx);
+
             if (ret == BF_GENERATOR_ERROR) {
                 PrintAndLogEx(ERR, "Internal bruteforce generator error");
                 free(keyBlock);
                 free(e_sector);
                 return PM3_EFAILED;
+
             } else if (ret == BF_GENERATOR_END) {
+
                 lastChunk = true;
                 break;
+
             } else if (ret == BF_GENERATOR_NEXT) {
+
                 generator_key = bf_get_key48(&bctx);
                 num_to_bytes(generator_key, MIFARE_KEY_SIZE, keyBlock + (i * MIFARE_KEY_SIZE));
                 keycnt++;
 
                 if (smart_mode_stage != bctx.smart_mode_stage) {
+
                     smart_mode_stage = bctx.smart_mode_stage;
                     PrintAndLogEx(INFO, "Running bruteforce stage %d", smart_mode_stage);
 
-                    if (msclock() - t1 > 0 && keys_checked > 0) {
+                    if (keys_checked) {
+
                         PrintAndLogEx(INFO, "Current cracking speed (keys/s): %lu",
-                                      keys_checked / ((msclock() - t1) / 1000));
+                                      keys_checked / ((msclock() - t1) / 1000)
+                                     );
 
                         t1 = msclock();
                         keys_checked = 0;
@@ -3534,7 +3654,7 @@ static int CmdHF14AMfSmartBrute(const char *Cmd) {
         }
 
         int strategy = 2; // width first on all sectors
-        ret = mfCheckKeys_fast(sectorsCnt, firstChunk, lastChunk, strategy, keycnt, keyBlock, e_sector, false, false);
+        ret = mf_check_keys_fast(sectorsCnt, firstChunk, lastChunk, strategy, keycnt, keyBlock, e_sector, false, false);
 
         keys_checked += keycnt;
         total_keys_checked += keycnt;
@@ -3554,11 +3674,13 @@ out:
     uint8_t found_keys = 0;
     for (i = 0; i < sectorsCnt; ++i) {
 
-        if (e_sector[i].foundKey[0])
+        if (e_sector[i].foundKey[0]) {
             found_keys++;
+        }
 
-        if (e_sector[i].foundKey[1])
+        if (e_sector[i].foundKey[1]) {
             found_keys++;
+        }
     }
 
     if (found_keys == 0) {
@@ -3576,7 +3698,7 @@ out:
             uint8_t block[MFBLOCK_SIZE] = {0x00};
             for (i = 0; i < sectorsCnt; ++i) {
                 uint8_t b = mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1;
-                mfEmlGetMem(block, b, 1);
+                mf_eml_get_mem(block, b, 1);
 
                 if (e_sector[i].foundKey[0])
                     num_to_bytes(e_sector[i].Key[0], MIFARE_KEY_SIZE, block);
@@ -3588,7 +3710,7 @@ out:
                     // Disable fast mode on last packet
                     g_conn.block_after_ACK = false;
                 }
-                mfEmlSetMem(block, b, 1);
+                mf_elm_set_mem(block, b, 1);
             }
             PrintAndLogEx(SUCCESS, "Found keys have been transferred to the emulator memory");
 
@@ -3640,6 +3762,7 @@ static int CmdHF14AMfChk(const char *Cmd) {
         arg_lit0(NULL, "emu", "Fill simulator keys from found keys"),
         arg_lit0(NULL, "dump", "Dump found keys to binary file"),
         arg_str0("f", "file", "<fn>", "Filename of dictionary"),
+        arg_lit0(NULL, "no-default", "Skip check default keys"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -3671,6 +3794,7 @@ static int CmdHF14AMfChk(const char *Cmd) {
     int fnlen = 0;
     char filename[FILE_PATH_SIZE] = {0};
     CLIParamStrToBuf(arg_get_str(ctx, 12), (uint8_t *)filename, FILE_PATH_SIZE, &fnlen);
+    bool load_default = ! arg_get_lit(ctx, 13);
 
     CLIParserFree(ctx);
 
@@ -3730,7 +3854,7 @@ static int CmdHF14AMfChk(const char *Cmd) {
 
     uint8_t *keyBlock = NULL;
     uint32_t keycnt = 0;
-    int ret = mf_load_keys(&keyBlock, &keycnt, key, keylen, filename, fnlen);
+    int ret = mf_load_keys(&keyBlock, &keycnt, key, keylen, filename, fnlen, load_default);
     if (ret != PM3_SUCCESS) {
         return ret;
     }
@@ -3781,7 +3905,7 @@ static int CmdHF14AMfChk(const char *Cmd) {
 
                 uint32_t size = keycnt - c > max_keys ? max_keys : keycnt - c;
 
-                if (mfCheckKeys(b, trgKeyType, clearLog, size, &keyBlock[MIFARE_KEY_SIZE * c], &key64) == PM3_SUCCESS) {
+                if (mf_check_keys(b, trgKeyType, clearLog, size, &keyBlock[MIFARE_KEY_SIZE * c], &key64) == PM3_SUCCESS) {
                     e_sector[i].Key[trgKeyType] = key64;
                     e_sector[i].foundKey[trgKeyType] = true;
                     clearLog = false;
@@ -3858,7 +3982,7 @@ out:
         uint8_t block[MFBLOCK_SIZE] = {0x00};
         for (int i = 0; i < sectors_cnt; ++i) {
             uint8_t blockno = mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1;
-            mfEmlGetMem(block, blockno, 1);
+            mf_eml_get_mem(block, blockno, 1);
 
             if (e_sector[i].foundKey[0])
                 num_to_bytes(e_sector[i].Key[0], MIFARE_KEY_SIZE, block);
@@ -3870,7 +3994,7 @@ out:
                 // Disable fast mode on last packet
                 g_conn.block_after_ACK = false;
             }
-            mfEmlSetMem(block, blockno, 1);
+            mf_elm_set_mem(block, blockno, 1);
         }
         PrintAndLogEx(SUCCESS, "Found keys have been transferred to the emulator memory");
     }
@@ -3915,7 +4039,13 @@ void readerAttack(sector_t *k_sector, size_t k_sectors_cnt, nonces_t data, bool 
     }
 
     uint64_t key = 0;
-    if (mfkey32_moebius(&data, &key)) {
+    bool found = false;
+    if ((nonce_state)data.state == SECOND) {
+        found = mfkey32_moebius(&data, &key);
+    } else if ((nonce_state)data.state == NESTED) {
+        found = mfkey32_nested(&data, &key);
+    }
+    if (found) {
         uint8_t sector = data.sector;
         uint8_t keytype = data.keytype;
 
@@ -3930,15 +4060,21 @@ void readerAttack(sector_t *k_sector, size_t k_sectors_cnt, nonces_t data, bool 
 
         //set emulator memory for keys
         if (setEmulatorMem) {
-            uint8_t memBlock[16] = {0, 0, 0, 0, 0, 0, 0xFF, 0x07, 0x80, 0x69, 0, 0, 0, 0, 0, 0};
-            num_to_bytes(k_sector[sector].Key[0], 6, memBlock);
-            num_to_bytes(k_sector[sector].Key[1], 6, memBlock + 10);
+            uint8_t memBlock[16];
+            mf_eml_get_mem(memBlock, (sector * 4) + 3, 1);
+            if ((memBlock[6] == 0) && (memBlock[7] == 0) && (memBlock[8] == 0)) {
+                // ACL not yet set?
+                memBlock[6] = 0xFF;
+                memBlock[7] = 0x07;
+                memBlock[8] = 0x80;
+            }
+            num_to_bytes(k_sector[sector].Key[keytype], 6, memBlock + ((keytype == MF_KEY_B) ? 10 : 0));
             //iceman,  guessing this will not work so well for 4K tags.
             PrintAndLogEx(INFO, "Setting Emulator Memory Block %02d: [%s]"
                           , (sector * 4) + 3
                           , sprint_hex(memBlock, sizeof(memBlock))
                          );
-            mfEmlSetMem(memBlock, (sector * 4) + 3, 1);
+            mf_elm_set_mem(memBlock, (sector * 4) + 3, 1);
         }
     }
 
@@ -3959,6 +4095,7 @@ static int CmdHF14AMfSim(const char *Cmd) {
                   "hf mf sim --1k -u 11223344 -i -x    --> Perform reader attack in interactive mode\n"
                   "hf mf sim --2k                      --> MIFARE 2k\n"
                   "hf mf sim --4k                      --> MIFARE 4k"
+                  "hf mf sim --1k -x -e                --> Keep simulation running and populate with found reader keys\n"
                  );
 
     void *argtable[] = {
@@ -3968,14 +4105,17 @@ static int CmdHF14AMfSim(const char *Cmd) {
         arg_lit0(NULL, "1k", "MIFARE Classic 1k / S50"),
         arg_lit0(NULL, "2k", "MIFARE Classic/Plus 2k"),
         arg_lit0(NULL, "4k", "MIFARE Classic 4k / S70"),
-        arg_str0(NULL, "atqa", "<hex>", "Provide explicit ATQA (2 bytes, overrides option t)"),
-        arg_str0(NULL, "sak", "<hex>", "Provide explicit SAK (1 bytes, overrides option t)"),
+        arg_str0(NULL, "atqa", "<hex>", "Provide explicit ATQA (2 bytes)"),
+        arg_str0(NULL, "sak", "<hex>", "Provide explicit SAK (1 bytes)"),
         arg_int0("n", "num", "<dec> ", "Automatically exit simulation after <numreads> blocks have been read by reader. 0 = infinite"),
         arg_lit0("i", "interactive", "Console will not be returned until simulation finishes or is aborted"),
-        arg_lit0("x", NULL, "Performs the 'reader attack', nr/ar attack against a reader"),
-        arg_lit0("e", "emukeys", "Fill simulator keys from found keys"),
-        arg_lit0("v", "verbose", "verbose output"),
-        arg_lit0(NULL, "cve", "trigger CVE 2021_0430"),
+        arg_lit0("x", NULL, "Performs the 'reader attack', nr/ar attack against a reader."),
+        arg_lit0("y", NULL, "Performs the nested 'reader attack'. This requires preloading nt & nt_enc in emulator memory. Implies -x."),
+        arg_lit0("e", "emukeys", "Fill simulator keys from found keys. Requires -x or -y. Implies -i. Simulation will restart automatically."),
+        // If access bits show that key B is Readable, any subsequent memory access should be refused.
+        arg_lit0(NULL, "allowkeyb", "Allow key B even if readable"),
+        arg_lit0("v", "verbose", "Verbose output"),
+        arg_lit0(NULL, "cve", "Trigger CVE 2021_0430"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -3986,25 +4126,12 @@ static int CmdHF14AMfSim(const char *Cmd) {
     uint8_t uid[10] = {0};
     CLIGetHexWithReturn(ctx, 1, uid, &uidlen);
 
-    char uidsize[8] = {0};
     if (uidlen > 0) {
-        switch (uidlen) {
-            case 10:
-                flags |= FLAG_10B_UID_IN_DATA;
-                snprintf(uidsize, sizeof(uidsize), "10 byte");
-                break;
-            case 7:
-                flags |= FLAG_7B_UID_IN_DATA;
-                snprintf(uidsize, sizeof(uidsize), "7 byte");
-                break;
-            case 4:
-                flags |= FLAG_4B_UID_IN_DATA;
-                snprintf(uidsize, sizeof(uidsize), "4 byte");
-                break;
-            default:
-                PrintAndLogEx(WARNING, "Invalid parameter for UID");
-                CLIParserFree(ctx);
-                return PM3_EINVARG;
+        FLAG_SET_UID_IN_DATA(flags, uidlen);
+        if (IS_FLAG_UID_IN_EMUL(flags)) {
+            PrintAndLogEx(WARNING, "Invalid parameter for UID");
+            CLIParserFree(ctx);
+            return PM3_EINVARG;
         }
     }
 
@@ -4031,10 +4158,19 @@ static int CmdHF14AMfSim(const char *Cmd) {
         flags |= FLAG_NR_AR_ATTACK;
     }
 
-    bool setEmulatorMem = arg_get_lit(ctx, 11);
-    bool verbose = arg_get_lit(ctx, 12);
+    if (arg_get_lit(ctx, 11)) {
+        flags |= FLAG_NESTED_AUTH_ATTACK;
+    }
+
+    bool setEmulatorMem = arg_get_lit(ctx, 12);
 
     if (arg_get_lit(ctx, 13)) {
+        flags |= FLAG_MF_USE_READ_KEYB;
+    }
+
+    bool verbose = arg_get_lit(ctx, 14);
+
+    if (arg_get_lit(ctx, 15)) {
         flags |= FLAG_CVE21_0430;
     }
     CLIParserFree(ctx);
@@ -4045,7 +4181,7 @@ static int CmdHF14AMfSim(const char *Cmd) {
             PrintAndLogEx(WARNING, "Wrong ATQA length");
             return PM3_EINVARG;
         }
-        flags |= FLAG_FORCED_ATQA;
+        flags |= FLAG_ATQA_IN_DATA;
     }
 
     if (saklen > 0) {
@@ -4053,12 +4189,7 @@ static int CmdHF14AMfSim(const char *Cmd) {
             PrintAndLogEx(WARNING, "Wrong SAK length");
             return PM3_EINVARG;
         }
-        flags |= FLAG_FORCED_SAK;
-    }
-
-    // Use UID, SAK, ATQA from EMUL, if uid not defined
-    if ((flags & (FLAG_4B_UID_IN_DATA | FLAG_7B_UID_IN_DATA | FLAG_10B_UID_IN_DATA)) == 0) {
-        flags |= FLAG_UID_IN_EMUL;
+        flags |= FLAG_SAK_IN_DATA;
     }
 
     size_t k_sectors_cnt = MIFARE_4K_MAXSECTOR;
@@ -4070,19 +4201,19 @@ static int CmdHF14AMfSim(const char *Cmd) {
     }
 
     if (m0) {
-        flags |= FLAG_MF_MINI;
+        FLAG_SET_MF_SIZE(flags, MIFARE_MINI_MAX_BYTES);
         snprintf(csize, sizeof(csize), "MINI");
         k_sectors_cnt = MIFARE_MINI_MAXSECTOR;
     } else if (m1) {
-        flags |= FLAG_MF_1K;
+        FLAG_SET_MF_SIZE(flags, MIFARE_1K_MAX_BYTES);
         snprintf(csize, sizeof(csize), "1K");
         k_sectors_cnt = MIFARE_1K_MAXSECTOR;
     } else if (m2) {
-        flags |= FLAG_MF_2K;
+        FLAG_SET_MF_SIZE(flags, MIFARE_2K_MAX_BYTES);
         snprintf(csize, sizeof(csize), "2K with RATS");
         k_sectors_cnt = MIFARE_2K_MAXSECTOR;
     } else if (m4) {
-        flags |= FLAG_MF_4K;
+        FLAG_SET_MF_SIZE(flags, MIFARE_4K_MAX_BYTES);
         snprintf(csize, sizeof(csize), "4K");
         k_sectors_cnt = MIFARE_4K_MAXSECTOR;
     } else {
@@ -4090,15 +4221,32 @@ static int CmdHF14AMfSim(const char *Cmd) {
         return PM3_EINVARG;
     }
 
-    PrintAndLogEx(INFO, _YELLOW_("MIFARE %s") " | %s UID  " _YELLOW_("%s") ""
+    if ((flags & FLAG_NESTED_AUTH_ATTACK) == FLAG_NESTED_AUTH_ATTACK) {
+        if ((flags & FLAG_NR_AR_ATTACK) != FLAG_NR_AR_ATTACK) {
+            PrintAndLogEx(INFO, "Note: option -y implies -x");
+            flags |= FLAG_NR_AR_ATTACK;
+        }
+    }
+
+    if (setEmulatorMem) {
+        if ((flags & FLAG_INTERACTIVE) != FLAG_INTERACTIVE) {
+            PrintAndLogEx(INFO, "Note: option -e implies -i");
+            flags |= FLAG_INTERACTIVE;
+        }
+        if ((flags & FLAG_NR_AR_ATTACK) != FLAG_NR_AR_ATTACK) {
+            PrintAndLogEx(WARNING, "Option -e requires -x or -y");
+            return PM3_EINVARG;
+        }
+    }
+
+    PrintAndLogEx(INFO, _YELLOW_("MIFARE %s") " | %i bytes UID  " _YELLOW_("%s") ""
                   , csize
-                  , uidsize
+                  , uidlen
                   , (uidlen == 0) ? "n/a" : sprint_hex(uid, uidlen)
                  );
 
-    PrintAndLogEx(INFO, "Options [ numreads: %d, flags: %d (0x%02x) ]"
+    PrintAndLogEx(INFO, "Options [ numreads: %d, flags: 0x%04x ]"
                   , exitAfterNReads
-                  , flags
                   , flags);
 
     struct {
@@ -4116,36 +4264,51 @@ static int CmdHF14AMfSim(const char *Cmd) {
     payload.sak = sak[0];
 
     clearCommandBuffer();
-    SendCommandNG(CMD_HF_MIFARE_SIMULATE, (uint8_t *)&payload, sizeof(payload));
-    PacketResponseNG resp;
 
     if (flags & FLAG_INTERACTIVE) {
-        PrintAndLogEx(INFO, "Press " _GREEN_("pm3 button") " or send another cmd to abort simulation");
-
-        sector_t *k_sector = NULL;
-
-        while (kbd_enter_pressed() == 0) {
-
-            if (WaitForResponseTimeout(CMD_ACK, &resp, 1500) == false)
-                continue;
-
-            if ((flags & FLAG_NR_AR_ATTACK) != FLAG_NR_AR_ATTACK)
-                break;
-
-            if ((resp.oldarg[0] & 0xffff) != CMD_HF_MIFARE_SIMULATE)
-                break;
-
-            nonces_t data[1];
-            memcpy(data, resp.data.asBytes, sizeof(data));
-            readerAttack(k_sector, k_sectors_cnt, data[0], setEmulatorMem, verbose);
-            break;
-        }
-        //iceman:  readerAttack call frees k_sector.  this call below is useless.
-        showSectorTable(k_sector, k_sectors_cnt);
-
+        PrintAndLogEx(INFO, "Press " _GREEN_("pm3 button") " or a key to abort simulation");
     } else {
-        PrintAndLogEx(INFO, "Press " _GREEN_("pm3 button") " to abort simulation");
+        PrintAndLogEx(INFO, "Press " _GREEN_("pm3 button") " or send another cmd to abort simulation");
     }
+    bool cont;
+    do {
+        cont = false;
+        SendCommandNG(CMD_HF_MIFARE_SIMULATE, (uint8_t *)&payload, sizeof(payload));
+        if (flags & FLAG_INTERACTIVE) {
+            PacketResponseNG resp;
+            sector_t *k_sector = NULL;
+
+            bool keypress = kbd_enter_pressed();
+            while (keypress == false) {
+
+                if (WaitForResponseTimeout(CMD_HF_MIFARE_SIMULATE, &resp, 1500) == 0) {
+                    keypress = kbd_enter_pressed();
+                    continue;
+                }
+
+                if (resp.status != PM3_SUCCESS)
+                    break;
+
+                if ((flags & FLAG_NR_AR_ATTACK) != FLAG_NR_AR_ATTACK)
+                    break;
+
+                const nonces_t *data = (nonces_t *)resp.data.asBytes;
+                readerAttack(k_sector, k_sectors_cnt, data[0], setEmulatorMem, verbose);
+                if (setEmulatorMem) {
+                    cont = true;
+                }
+                break;
+            }
+            if (keypress) {
+                if ((flags & FLAG_NR_AR_ATTACK) == FLAG_NR_AR_ATTACK) {
+                    // inform device to break the sim loop since client has exited
+                    PrintAndLogEx(INFO, "Key pressed, please wait a few seconds for the pm3 to stop...");
+                    SendCommandNG(CMD_BREAK_LOOP, NULL, 0);
+                }
+            }
+        }
+
+    } while (cont);
     return PM3_SUCCESS;
 }
 
@@ -4245,13 +4408,18 @@ void printKeyTableEx(size_t sectorscnt, sector_t *e_sector, uint8_t start_sector
             s = i;
         }
 
-        PrintAndLogEx(SUCCESS, " " _YELLOW_("%03d") " | %03d | %s | %s | %s | %s"
+        char extra[24] = {0x00};
+        if (sectorscnt == 18 && i > 15) {
+            strcat(extra, "( " _MAGENTA_("*") " )");
+        }
+
+        PrintAndLogEx(SUCCESS, " " _YELLOW_("%03d") " | %03d | %s | %s | %s | %s %s"
                       , s
                       , mfSectorTrailerOfSector(s)
                       , strA, resA
                       , strB, resB
+                      , extra
                      );
-
     }
 
     PrintAndLogEx(SUCCESS, "-----+-----+--------------+---+--------------+----");
@@ -4268,6 +4436,10 @@ void printKeyTableEx(size_t sectorscnt, sector_t *e_sector, uint8_t start_sector
                       _YELLOW_("A") ":keyA "
                       " )"
                      );
+        if (sectorscnt == 18) {
+            PrintAndLogEx(INFO, "( " _MAGENTA_("*") " ) These sectors used for signature. Lays outside of user memory");
+        }
+
     } else {
         PrintAndLogEx(SUCCESS, "( " _RED_("0") ":Failed / " _GREEN_("1") ":Success )");
     }
@@ -4309,7 +4481,7 @@ static int CmdHF14AMfEGetBlk(const char *Cmd) {
     uint8_t blockno = (uint8_t)b;
 
     uint8_t data[16] = {0x00};
-    if (mfEmlGetMem(data, blockno, 1) == PM3_SUCCESS) {
+    if (mf_eml_get_mem(data, blockno, 1) == PM3_SUCCESS) {
 
         uint8_t sector = mfSectorNum(blockno);
         mf_print_sector_hdr(sector);
@@ -4353,7 +4525,7 @@ static int CmdHF14AMfEGetSc(const char *Cmd) {
 
     uint8_t data[16] = {0};
     for (int i = 0; i < blocks; i++) {
-        int res = mfEmlGetMem(data, start + i, 1);
+        int res = mf_eml_get_mem(data, start + i, 1);
         if (res == PM3_SUCCESS) {
             mf_print_block_one(start + i, data, verbose);
         }
@@ -4419,7 +4591,7 @@ static int CmdHF14AMfESet(const char *Cmd) {
     }
 
     //  1 - blocks count
-    return mfEmlSetMem(data, b, 1);
+    return mf_elm_set_mem(data, b, 1);
 }
 
 int CmdHF14AMfELoad(const char *Cmd) {
@@ -4572,7 +4744,7 @@ int CmdHF14AMfELoad(const char *Cmd) {
     size_t offset = 0;
     int cnt = 0;
 
-    // 12 is the size of the struct the fct mfEmlSetMem_xt uses to transfer to device
+    // 12 is the size of the struct the fct mf_eml_set_mem_xt uses to transfer to device
     uint16_t max_avail_blocks = ((PM3_CMD_DATA_SIZE - 12) / block_width) * block_width;
 
     while (bytes_read && cnt < block_cnt) {
@@ -4584,7 +4756,7 @@ int CmdHF14AMfELoad(const char *Cmd) {
         uint16_t chunk_size = MIN(max_avail_blocks, bytes_read);
         uint16_t blocks_to_send = chunk_size / block_width;
 
-        if (mfEmlSetMem_xt(data + offset, cnt, blocks_to_send, block_width) != PM3_SUCCESS) {
+        if (mf_eml_set_mem_xt(data + offset, cnt, blocks_to_send, block_width) != PM3_SUCCESS) {
             PrintAndLogEx(FAILED, "Can't set emulator mem at block: %3d", cnt);
             free(data);
             return PM3_ESOFT;
@@ -4711,7 +4883,7 @@ static int CmdHF14AMfEView(const char *Cmd) {
         arg_lit0(NULL, "2k", "MIFARE Classic/Plus 2k"),
         arg_lit0(NULL, "4k", "MIFARE Classic 4k / S70"),
         arg_lit0("v", "verbose", "verbose output"),
-        arg_lit0(NULL, "sk", "Save extracted keys to file"),
+        arg_lit0(NULL, "sk", "Save extracted keys to binary file"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -4788,6 +4960,8 @@ static int CmdHF14AMfECFill(const char *Cmd) {
         arg_param_begin,
         arg_lit0("a", NULL, "input key type is key A(def)"),
         arg_lit0("b", NULL, "input key type is key B"),
+        arg_int0("c", NULL, "<dec>", "input key type is key A + offset"),
+        arg_str0("k", "key", "<hex>", "key, 6 hex bytes, only for option -c"),
         arg_lit0(NULL, "mini", "MIFARE Classic Mini / S20"),
         arg_lit0(NULL, "1k", "MIFARE Classic 1k / S50 (def)"),
         arg_lit0(NULL, "2k", "MIFARE Classic/Plus 2k"),
@@ -4798,16 +4972,33 @@ static int CmdHF14AMfECFill(const char *Cmd) {
     uint8_t keytype = MF_KEY_A;
     if (arg_get_lit(ctx, 1) && arg_get_lit(ctx, 2)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single input key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 2)) {
         keytype = MF_KEY_B;
     }
+    uint8_t prev_keytype = keytype;
+    keytype = arg_get_int_def(ctx, 3, keytype);
+    if ((arg_get_lit(ctx, 1) || arg_get_lit(ctx, 2)) && (keytype != prev_keytype)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single input key type");
+        return PM3_EINVARG;
+    }
+    int keylen = 0;
+    uint8_t key[6] = {0};
+    CLIGetHexWithReturn(ctx, 4, key, &keylen);
+    if ((keytype > MF_KEY_B) && (keylen != 6)) {
+        PrintAndLogEx(WARNING, "Missing key");
+        return PM3_EINVARG;
+    }
+    if ((keytype <= MF_KEY_B) && (keylen > 0)) {
+        PrintAndLogEx(WARNING, "Ignoring provided key");
+    }
 
-    bool m0 = arg_get_lit(ctx, 3);
-    bool m1 = arg_get_lit(ctx, 4);
-    bool m2 = arg_get_lit(ctx, 5);
-    bool m4 = arg_get_lit(ctx, 6);
+    bool m0 = arg_get_lit(ctx, 5);
+    bool m1 = arg_get_lit(ctx, 6);
+    bool m2 = arg_get_lit(ctx, 7);
+    bool m4 = arg_get_lit(ctx, 8);
     CLIParserFree(ctx);
 
     // validations
@@ -4837,12 +5028,25 @@ static int CmdHF14AMfECFill(const char *Cmd) {
         .sectorcnt = sectors_cnt,
         .keytype = keytype
     };
+    memcpy(payload.key, key, sizeof(payload.key));
 
     clearCommandBuffer();
+    uint64_t t1 = msclock();
     SendCommandNG(CMD_HF_MIFARE_EML_LOAD, (uint8_t *)&payload, sizeof(payload));
 
-    // 2021, iceman:  should get a response from device when its done.
-    return PM3_SUCCESS;
+    PacketResponseNG resp;
+    if (WaitForResponseTimeout(CMD_HF_MIFARE_EML_LOAD, &resp, 1500) == false) {
+        PrintAndLogEx(WARNING, "command execution time out");
+        return PM3_ETIMEOUT;
+    }
+    t1 = msclock() - t1;
+
+    if (resp.status == PM3_SUCCESS)
+        PrintAndLogEx(SUCCESS, "Fill ( " _GREEN_("ok") " ) in " _YELLOW_("%" PRIu64) " ms", t1);
+    else
+        PrintAndLogEx(FAILED, "Fill ( " _RED_("fail") " )");
+
+    return resp.status;
 }
 
 static int CmdHF14AMfEKeyPrn(const char *Cmd) {
@@ -4902,7 +5106,7 @@ static int CmdHF14AMfEKeyPrn(const char *Cmd) {
 
     // read UID from EMUL
     uint8_t data[16];
-    if (mfEmlGetMem(data, 0, 1) != PM3_SUCCESS) {
+    if (mf_eml_get_mem(data, 0, 1) != PM3_SUCCESS) {
         PrintAndLogEx(WARNING, "error get block 0");
         free(e_sector);
         return PM3_ESOFT;
@@ -4915,7 +5119,7 @@ static int CmdHF14AMfEKeyPrn(const char *Cmd) {
     // download keys from EMUL
     for (int i = 0; i < sectors_cnt; i++) {
 
-        if (mfEmlGetMem(data, mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1, 1) != PM3_SUCCESS) {
+        if (mf_eml_get_mem(data, mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1, 1) != PM3_SUCCESS) {
             PrintAndLogEx(WARNING, "error get block %d", mfFirstBlockOfSector(i) + mfNumBlocksPerSector(i) - 1);
             e_sector[i].foundKey[0] = false;
             e_sector[i].foundKey[1] = false;
@@ -4959,6 +5163,7 @@ static int CmdHF14AMfCSetUID(const char *Cmd) {
         arg_str0("u", "uid",  "<hex>", "UID, 4/7 hex bytes"),
         arg_str0("a", "atqa", "<hex>", "ATQA, 2 hex bytes"),
         arg_str0("s", "sak",  "<hex>", "SAK, 1 hex byte"),
+        arg_lit0(NULL, "gdm", "use gdm alt (20/23) magic wakeup"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -4976,6 +5181,7 @@ static int CmdHF14AMfCSetUID(const char *Cmd) {
     int slen = 0;
     uint8_t sak[1] = {0x00};
     CLIGetHexWithReturn(ctx, 4, sak, &slen);
+    uint8_t gdm = arg_get_lit(ctx, 5);
     CLIParserFree(ctx);
 
     // sanity checks
@@ -4995,14 +5201,15 @@ static int CmdHF14AMfCSetUID(const char *Cmd) {
     uint8_t old_uid[7] = {0};
     uint8_t verify_uid[7] = {0};
 
-    int res = mfCSetUID(
+    int res = mf_chinese_set_uid(
                   uid,
                   uidlen,
                   (alen) ? atqa : NULL,
                   (slen) ? sak : NULL,
                   old_uid,
                   verify_uid,
-                  wipe_card
+                  wipe_card,
+                  gdm
               );
 
     if (res) {
@@ -5033,6 +5240,7 @@ static int CmdHF14AMfCWipe(const char *cmd) {
         arg_str0("u", "uid",  "<hex>", "UID, 4 hex bytes"),
         arg_str0("a", "atqa", "<hex>", "ATQA, 2 hex bytes"),
         arg_str0("s", "sak",  "<hex>", "SAK, 1 hex byte"),
+        arg_lit0(NULL, "gdm", "use gdm alt (20/23) magic wakeup"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, cmd, argtable, true);
@@ -5048,6 +5256,7 @@ static int CmdHF14AMfCWipe(const char *cmd) {
     int slen = 0;
     uint8_t sak[1] = {0x00};
     CLIGetHexWithReturn(ctx, 3, sak, &slen);
+    uint8_t gdm = arg_get_lit(ctx, 4);
     CLIParserFree(ctx);
 
     if (uidlen && uidlen != 4) {
@@ -5063,7 +5272,7 @@ static int CmdHF14AMfCWipe(const char *cmd) {
         return PM3_EINVARG;
     }
 
-    int res = mfCWipe((uidlen) ? uid : NULL, (alen) ? atqa : NULL, (slen) ? sak : NULL);
+    int res = mf_chinese_wipe((uidlen) ? uid : NULL, (alen) ? atqa : NULL, (slen) ? sak : NULL, gdm);
     if (res) {
         PrintAndLogEx(ERR, "Can't wipe card. error %d", res);
         return PM3_ESOFT;
@@ -5085,6 +5294,7 @@ static int CmdHF14AMfCSetBlk(const char *Cmd) {
         arg_int1("b", "blk", "<dec>", "block number"),
         arg_str0("d", "data", "<hex>", "bytes to write, 16 hex bytes"),
         arg_lit0("w", "wipe", "wipes card with backdoor cmd before writing"),
+        arg_lit0(NULL, "gdm", "use gdm alt (20/23) magic wakeup"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
@@ -5096,6 +5306,7 @@ static int CmdHF14AMfCSetBlk(const char *Cmd) {
     CLIGetHexWithReturn(ctx, 2, data, &datalen);
 
     uint8_t wipe_card = arg_get_lit(ctx, 3);
+    uint8_t gdm = arg_get_lit(ctx, 4);
     CLIParserFree(ctx);
 
     if (b < 0 ||  b >= MIFARE_1K_MAXBLOCK) {
@@ -5109,13 +5320,19 @@ static int CmdHF14AMfCSetBlk(const char *Cmd) {
     }
 
     uint8_t params = MAGIC_SINGLE;
+    if (gdm) {
+        params |= MAGIC_GDM_ALT_WUPC;
+    } else {
+        params |= MAGIC_WUPC;
+    }
+
     if (wipe_card) {
         params |= MAGIC_WIPE;
     }
 
     PrintAndLogEx(INFO, "Writing block number:%2d data:%s", b, sprint_hex_inrow(data, sizeof(data)));
 
-    int res = mfCSetBlock(b, data, NULL, params);
+    int res = mf_chinese_set_block(b, data, NULL, params);
     if (res) {
         PrintAndLogEx(ERR, "Can't write block. error=%d", res);
         return PM3_ESOFT;
@@ -5140,6 +5357,7 @@ static int CmdHF14AMfCLoad(const char *Cmd) {
         arg_lit0(NULL, "2k", "MIFARE Classic/Plus 2k"),
         arg_lit0(NULL, "4k", "MIFARE Classic 4k / S70"),
         arg_lit0(NULL, "emu", "from emulator memory"),
+        arg_lit0(NULL, "gdm", "use gdm alt (20/23) magic wakeup"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
@@ -5153,6 +5371,7 @@ static int CmdHF14AMfCLoad(const char *Cmd) {
     bool m2 = arg_get_lit(ctx, 4);
     bool m4 = arg_get_lit(ctx, 5);
     bool fill_from_emulator = arg_get_lit(ctx, 6);
+    bool gdm = arg_get_lit(ctx, 7);
 
     CLIParserFree(ctx);
 
@@ -5186,7 +5405,7 @@ static int CmdHF14AMfCLoad(const char *Cmd) {
 
     if (fill_from_emulator) {
 
-        PrintAndLogEx(INFO, "Start upload to emulator memory");
+        PrintAndLogEx(INFO, "Start upload from emulator memory");
         PrintAndLogEx(INFO, "." NOLF);
 
         for (int b = 0; b < block_cnt; b++) {
@@ -5194,14 +5413,14 @@ static int CmdHF14AMfCLoad(const char *Cmd) {
             uint8_t buf8[MFBLOCK_SIZE] = {0x00};
 
             // read from emul memory
-            if (mfEmlGetMem(buf8, b, 1)) {
+            if (mf_eml_get_mem(buf8, b, 1)) {
                 PrintAndLogEx(WARNING, "Can't read from emul block: %d", b);
                 return PM3_ESOFT;
             }
 
             // switch on field and send magic sequence
             if (b == 0) {
-                flags = MAGIC_INIT + MAGIC_WUPC;
+                flags = MAGIC_INIT | (gdm ? MAGIC_GDM_ALT_WUPC : MAGIC_WUPC);
             }
 
             // just write
@@ -5215,7 +5434,7 @@ static int CmdHF14AMfCLoad(const char *Cmd) {
             }
 
             // write to card
-            if (mfCSetBlock(b, buf8, NULL, flags)) {
+            if (mf_chinese_set_block(b, buf8, NULL, flags)) {
                 PrintAndLogEx(WARNING, "Can't set magic card block: %d", b);
                 return PM3_ESOFT;
             }
@@ -5249,7 +5468,7 @@ static int CmdHF14AMfCLoad(const char *Cmd) {
 
         // switch on field and send magic sequence
         if (blockno == 0) {
-            flags = MAGIC_INIT + MAGIC_WUPC;
+            flags = MAGIC_INIT | (gdm ? MAGIC_GDM_ALT_WUPC : MAGIC_WUPC);
         }
 
         // write
@@ -5262,7 +5481,7 @@ static int CmdHF14AMfCLoad(const char *Cmd) {
             flags = MAGIC_HALT + MAGIC_OFF;
         }
 
-        if (mfCSetBlock(blockno, data + (MFBLOCK_SIZE * blockno), NULL, flags)) {
+        if (mf_chinese_set_block(blockno, data + (MFBLOCK_SIZE * blockno), NULL, flags)) {
             PrintAndLogEx(WARNING, "Can't set magic card block: %d", blockno);
             free(data);
             return PM3_ESOFT;
@@ -5304,11 +5523,13 @@ static int CmdHF14AMfCGetBlk(const char *Cmd) {
         arg_param_begin,
         arg_int1("b",  "blk", "<dec>", "block number"),
         arg_lit0("v", "verbose", "verbose output"),
+        arg_lit0(NULL, "gdm", "use gdm alt (20/23) magic wakeup"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
     int b = arg_get_int_def(ctx, 1, 0);
     bool verbose = arg_get_lit(ctx, 2);
+    bool gdm = arg_get_lit(ctx, 3);
     CLIParserFree(ctx);
 
     if (b > 255) {
@@ -5317,7 +5538,7 @@ static int CmdHF14AMfCGetBlk(const char *Cmd) {
 
     uint8_t blockno = (uint8_t)b;
     uint8_t data[16] = {0};
-    int res = mfCGetBlock(blockno, data, MAGIC_SINGLE);
+    int res = mf_chinese_get_block(blockno, data, MAGIC_SINGLE | (gdm ? MAGIC_GDM_ALT_WUPC : MAGIC_WUPC));
     if (res) {
         PrintAndLogEx(ERR, "Can't read block. error=%d", res);
         return PM3_ESOFT;
@@ -5346,11 +5567,13 @@ static int CmdHF14AMfCGetSc(const char *Cmd) {
         arg_param_begin,
         arg_int1("s",  "sec", "<dec>", "sector number"),
         arg_lit0("v", "verbose", "verbose output"),
+        arg_lit0(NULL, "gdm", "use gdm alt (20/23) magic wakeup"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
     int s = arg_get_int_def(ctx, 1, 0);
     bool verbose = arg_get_lit(ctx, 2);
+    bool gdm = arg_get_lit(ctx, 3);
     CLIParserFree(ctx);
 
     if (s >= MIFARE_4K_MAXSECTOR) {
@@ -5368,13 +5591,13 @@ static int CmdHF14AMfCGetSc(const char *Cmd) {
         start = 128 + (sector - 32) * 16;
     }
 
-    int flags = MAGIC_INIT + MAGIC_WUPC;
+    int flags = MAGIC_INIT + (gdm ? MAGIC_GDM_ALT_WUPC : MAGIC_WUPC);
     uint8_t data[16] = {0};
     for (int i = 0; i < blocks; i++) {
         if (i == 1) flags = 0;
         if (i == blocks - 1) flags = MAGIC_HALT + MAGIC_OFF;
 
-        int res = mfCGetBlock(start + i, data, flags);
+        int res = mf_chinese_get_block(start + i, data, flags);
         if (res) {
             PrintAndLogEx(ERR, "Can't read block. %d error=%d", start + i, res);
             return PM3_ESOFT;
@@ -5405,6 +5628,7 @@ static int CmdHF14AMfCSave(const char *Cmd) {
         arg_lit0(NULL, "2k", "MIFARE Classic/Plus 2k"),
         arg_lit0(NULL, "4k", "MIFARE Classic 4k / S70"),
         arg_lit0(NULL, "emu", "to emulator memory"),
+        arg_lit0(NULL, "gdm", "to emulator memory"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -5418,6 +5642,7 @@ static int CmdHF14AMfCSave(const char *Cmd) {
     bool m2 = arg_get_lit(ctx, 4);
     bool m4 = arg_get_lit(ctx, 5);
     bool fill_emulator = arg_get_lit(ctx, 6);
+    bool gdm = arg_get_lit(ctx, 7);
     CLIParserFree(ctx);
 
     // validations
@@ -5485,7 +5710,7 @@ static int CmdHF14AMfCSave(const char *Cmd) {
     }
 
     // switch on field and send magic sequence
-    uint8_t flags = MAGIC_INIT + MAGIC_WUPC;
+    uint8_t flags = MAGIC_INIT + (gdm ? MAGIC_GDM_ALT_WUPC : MAGIC_WUPC);
     for (uint16_t i = 0; i < block_cnt; i++) {
 
         // read
@@ -5497,7 +5722,7 @@ static int CmdHF14AMfCSave(const char *Cmd) {
             flags = MAGIC_HALT + MAGIC_OFF;
         }
 
-        if (mfCGetBlock(i, dump + (i * MFBLOCK_SIZE), flags)) {
+        if (mf_chinese_get_block(i, dump + (i * MFBLOCK_SIZE), flags)) {
             PrintAndLogEx(WARNING, "Can't get magic card block: %d", i);
             PrintAndLogEx(HINT, "Verify your card size, and try again or try another tag position");
             free(dump);
@@ -5518,7 +5743,7 @@ static int CmdHF14AMfCSave(const char *Cmd) {
                 // Disable fast mode on last packet
                 g_conn.block_after_ACK = false;
             }
-            if (mfEmlSetMem(dump + (i * MFBLOCK_SIZE), i, 5) != PM3_SUCCESS) {
+            if (mf_elm_set_mem(dump + (i * MFBLOCK_SIZE), i, 5) != PM3_SUCCESS) {
                 PrintAndLogEx(WARNING, "Can't set emul block: " _YELLOW_("%d"), i);
             }
             if (i % 64 == 0) {
@@ -5559,6 +5784,7 @@ static int CmdHF14AMfCView(const char *Cmd) {
         arg_lit0(NULL, "2k", "MIFARE Classic/Plus 2k"),
         arg_lit0(NULL, "4k", "MIFARE Classic 4k / S70"),
         arg_lit0("v", "verbose", "verbose output"),
+        arg_lit0(NULL, "gdm", "use gdm alt (20/23) magic wakeup"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -5567,6 +5793,7 @@ static int CmdHF14AMfCView(const char *Cmd) {
     bool m2 = arg_get_lit(ctx, 3);
     bool m4 = arg_get_lit(ctx, 4);
     bool verbose = arg_get_lit(ctx, 5);
+    bool gdm = arg_get_lit(ctx, 6);
     CLIParserFree(ctx);
 
     // validations
@@ -5633,7 +5860,7 @@ static int CmdHF14AMfCView(const char *Cmd) {
     }
 
     // switch on field and send magic sequence
-    uint8_t flags = MAGIC_INIT + MAGIC_WUPC;
+    uint8_t flags = MAGIC_INIT + (gdm ? MAGIC_GDM_ALT_WUPC : MAGIC_WUPC);
     for (uint16_t i = 0; i < block_cnt; i++) {
         // read
         if (i == 1) {
@@ -5644,7 +5871,7 @@ static int CmdHF14AMfCView(const char *Cmd) {
             flags = MAGIC_HALT + MAGIC_OFF;
         }
 
-        if (mfCGetBlock(i, dump + (i * MFBLOCK_SIZE), flags)) {
+        if (mf_chinese_get_block(i, dump + (i * MFBLOCK_SIZE), flags)) {
             PrintAndLogEx(WARNING, "Can't get magic card block: " _YELLOW_("%u"), i);
             PrintAndLogEx(HINT, "Verify your card size, and try again or try another tag position");
             free(dump);
@@ -5717,7 +5944,7 @@ static int CmdHf14AMfDecryptBytes(const char *Cmd) {
     PrintAndLogEx(INFO, "ar enc... %08X", ar_enc);
     PrintAndLogEx(INFO, "at enc... %08X", at_enc);
 
-    return tryDecryptWord(nt, ar_enc, at_enc, data, datalen);
+    return try_decrypt_word(nt, ar_enc, at_enc, data, datalen);
 }
 
 static int CmdHf14AMfSetMod(const char *Cmd) {
@@ -5761,7 +5988,7 @@ static int CmdHf14AMfSetMod(const char *Cmd) {
     SendCommandNG(CMD_HF_MIFARE_SETMOD, data, sizeof(data));
     PacketResponseNG resp;
     if (WaitForResponseTimeout(CMD_HF_MIFARE_SETMOD, &resp, 1500) == false) {
-        PrintAndLogEx(WARNING, "Command execute timeout");
+        PrintAndLogEx(WARNING, "command execution time out");
         return PM3_ETIMEOUT;
     }
 
@@ -5954,7 +6181,8 @@ static int CmdHF14AMfMAD(const char *Cmd) {
         arg_lit0("b",  "keyb",     "use key B for access printing sectors (by default: key A)"),
         arg_lit0(NULL, "be",       "(optional, BigEndian)"),
         arg_lit0(NULL, "dch",      "decode Card Holder information"),
-        arg_str0("f", "file",      "<fn>", "load dump file and decode MAD"),
+        arg_str0("f",  "file",     "<fn>", "load dump file and decode MAD"),
+        arg_lit0(NULL, "force",    "force decode (skip key check)"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
@@ -5968,6 +6196,7 @@ static int CmdHF14AMfMAD(const char *Cmd) {
     bool keyB = arg_get_lit(ctx, 4);
     bool swapmad = arg_get_lit(ctx, 5);
     bool decodeholder = arg_get_lit(ctx, 6);
+    bool force = arg_get_lit(ctx, 8);
 
     int fnlen = 0;
     char filename[FILE_PATH_SIZE] = {0};
@@ -5997,7 +6226,7 @@ static int CmdHF14AMfMAD(const char *Cmd) {
         }
 
         // MAD detection
-        if (HasMADKey(dump) == false) {
+        if ((HasMADKey(dump) == false) && (force == false)) {
             PrintAndLogEx(FAILED, "No MAD key was detected in the dump file");
             free(dump);
             return PM3_ESOFT;
@@ -6082,7 +6311,7 @@ static int CmdHF14AMfMAD(const char *Cmd) {
     uint8_t sector10[MFBLOCK_SIZE * 4] = {0};
 
     bool got_first = true;
-    if (mfReadSector(MF_MAD1_SECTOR, MF_KEY_A, (uint8_t *)g_mifare_mad_key, sector0) != PM3_SUCCESS) {
+    if (mf_read_sector(MF_MAD1_SECTOR, MF_KEY_A, (uint8_t *)g_mifare_mad_key, sector0) != PM3_SUCCESS) {
         PrintAndLogEx(WARNING, "error, read sector 0. card doesn't have MAD or doesn't have MAD on default keys");
         got_first = false;
     } else {
@@ -6092,7 +6321,7 @@ static int CmdHF14AMfMAD(const char *Cmd) {
     // User supplied key
     if (got_first == false && keylen == 6) {
         PrintAndLogEx(INFO, "Trying user specified key...");
-        if (mfReadSector(MF_MAD1_SECTOR, MF_KEY_A, userkey, sector0) != PM3_SUCCESS) {
+        if (mf_read_sector(MF_MAD1_SECTOR, MF_KEY_A, userkey, sector0) != PM3_SUCCESS) {
             PrintAndLogEx(ERR, "error, read sector 0. card doesn't have MAD or the custom key is wrong");
         } else {
             PrintAndLogEx(INFO, "Authentication ( " _GREEN_("ok") " )");
@@ -6106,7 +6335,7 @@ static int CmdHF14AMfMAD(const char *Cmd) {
     }
 
     got_first = true;
-    if (mfReadSector(MF_MAD2_SECTOR, MF_KEY_A, (uint8_t *)g_mifare_mad_key, sector10) != PM3_SUCCESS) {
+    if (mf_read_sector(MF_MAD2_SECTOR, MF_KEY_A, (uint8_t *)g_mifare_mad_key, sector10) != PM3_SUCCESS) {
         if (verbose) {
             PrintAndLogEx(ERR, "error, read sector 0x10. card doesn't have MAD 2 or doesn't have MAD 2 on default keys");
         }
@@ -6118,7 +6347,7 @@ static int CmdHF14AMfMAD(const char *Cmd) {
     // User supplied key
     if (got_first == false && keylen == 6) {
         PrintAndLogEx(INFO, "Trying user specified key...");
-        if (mfReadSector(MF_MAD2_SECTOR, MF_KEY_A, userkey, sector10) != PM3_SUCCESS) {
+        if (mf_read_sector(MF_MAD2_SECTOR, MF_KEY_A, userkey, sector10) != PM3_SUCCESS) {
             if (verbose) {
                 PrintAndLogEx(ERR, "error, read sector 10. card doesn't have MAD 2 or the custom key is wrong");
             }
@@ -6164,7 +6393,7 @@ static int CmdHF14AMfMAD(const char *Cmd) {
             for (int i = 0; i < madlen; i++) {
                 if (aaid == mad[i]) {
                     uint8_t vsector[MFBLOCK_SIZE * 4] = {0};
-                    if (mfReadSector(i + 1, keyB ? MF_KEY_B : MF_KEY_A, akey, vsector)) {
+                    if (mf_read_sector(i + 1, keyB ? MF_KEY_B : MF_KEY_A, akey, vsector)) {
                         PrintAndLogEx(NORMAL, "");
                         PrintAndLogEx(ERR, "error, read sector %d", i + 1);
                         return PM3_ESOFT;
@@ -6188,7 +6417,7 @@ static int CmdHF14AMfMAD(const char *Cmd) {
                 if (aaid == mad[i]) {
 
                     uint8_t vsector[MFBLOCK_SIZE * 4] = {0};
-                    if (mfReadSector(i + 1, keyB ? MF_KEY_B : MF_KEY_A, akey, vsector)) {
+                    if (mf_read_sector(i + 1, keyB ? MF_KEY_B : MF_KEY_A, akey, vsector)) {
                         PrintAndLogEx(NORMAL, "");
                         PrintAndLogEx(ERR, "error, read sector %d", i + 1);
                         return PM3_ESOFT;
@@ -6285,7 +6514,7 @@ int CmdHFMFNDEFRead(const char *Cmd) {
         PrintAndLogEx(INFO, "reading MAD v1 sector");
     }
 
-    if (mfReadSector(MF_MAD1_SECTOR, MF_KEY_A, g_mifare_mad_key, sector0)) {
+    if (mf_read_sector(MF_MAD1_SECTOR, MF_KEY_A, g_mifare_mad_key, sector0)) {
         PrintAndLogEx(ERR, "error, read sector 0. card doesn't have MAD or doesn't have MAD on default keys");
         PrintAndLogEx(HINT, "Try " _YELLOW_("`hf mf ndefread -k `") " with your custom key");
         return PM3_ESOFT;
@@ -6295,7 +6524,7 @@ int CmdHFMFNDEFRead(const char *Cmd) {
         PrintAndLogEx(INFO, "reading MAD v2 sector");
     }
 
-    if (mfReadSector(MF_MAD2_SECTOR, MF_KEY_A, g_mifare_mad_key, sector10)) {
+    if (mf_read_sector(MF_MAD2_SECTOR, MF_KEY_A, g_mifare_mad_key, sector10)) {
         if (verbose) {
             PrintAndLogEx(ERR, "error, read sector 0x10. card doesn't have MAD 2 or doesn't have MAD 2 on default keys");
             PrintAndLogEx(INFO, "Skipping MAD 2");
@@ -6321,7 +6550,7 @@ int CmdHFMFNDEFRead(const char *Cmd) {
     for (int i = 0; i < madlen; i++) {
         if (ndef_aid == mad[i]) {
             uint8_t vsector[MFBLOCK_SIZE * 4] = {0};
-            if (mfReadSector(i + 1, keyB ? MF_KEY_B : MF_KEY_A, ndefkey, vsector)) {
+            if (mf_read_sector(i + 1, keyB ? MF_KEY_B : MF_KEY_A, ndefkey, vsector)) {
                 PrintAndLogEx(ERR, "error, reading sector %d ", i + 1);
                 return PM3_ESOFT;
             }
@@ -6351,12 +6580,16 @@ int CmdHFMFNDEFRead(const char *Cmd) {
         res = NDEFRecordsDecodeAndPrint(data, datalen, verbose);
     }
 
-    // get total NDEF length before save. If fails, we save it all
-    size_t n = 0;
-    if (NDEFGetTotalLength(data, datalen, &n) != PM3_SUCCESS)
-        n = datalen;
+    // if given a filename, save it
+    if (fnlen) {
+        // get total NDEF length before save. If fails, we save it all
+        size_t n = 0;
+        if (NDEFGetTotalLength(data, datalen, &n) != PM3_SUCCESS) {
+            n = datalen;
+        }
 
-    pm3_save_dump(filename, data, n, jsfNDEF);
+        pm3_save_dump(filename, data, n, jsfNDEF);
+    }
 
     if (verbose == false) {
         PrintAndLogEx(HINT, "Try " _YELLOW_("`hf mf ndefread -v`") " for more details");
@@ -6466,7 +6699,7 @@ int CmdHFMFNDEFFormat(const char *Cmd) {
     uint64_t key64 = 0;
 
     // check if we can authenticate to sector
-    if (mfCheckKeys(0, MF_KEY_A, true, 1, (uint8_t *)g_mifare_mad_key, &key64) == PM3_SUCCESS) {
+    if (mf_check_keys(0, MF_KEY_A, true, 1, (uint8_t *)g_mifare_mad_key, &key64) == PM3_SUCCESS) {
 
         // if used,  assume KEY A is MAD/NDEF set.
         memcpy(keyA[0], g_mifare_mad_key, sizeof(g_mifare_mad_key));
@@ -6548,9 +6781,9 @@ skipfile:
             }
 
             // write to card,  try B key first
-            if (mf_write_block(keyB[i], MF_KEY_B, b, block) == 0) {
+            if (mf_write_block(b, MF_KEY_B, keyB[i], block) != PM3_SUCCESS) {
                 // try A key,
-                if (mf_write_block(keyA[i], MF_KEY_A, b, block) == 0) {
+                if (mf_write_block(b, MF_KEY_A, keyA[i], block) != PM3_SUCCESS) {
                     return PM3_EFAILED;
                 }
             }
@@ -6645,7 +6878,7 @@ int CmdHFMFNDEFWrite(const char *Cmd) {
     uint64_t key64 = 0;
 
     // check if we can authenticate to sector
-    int res = mfCheckKeys(0, MF_KEY_A, true, 1, (uint8_t *)g_mifare_mad_key, &key64);
+    int res = mf_check_keys(0, MF_KEY_A, true, 1, (uint8_t *)g_mifare_mad_key, &key64);
     if (res != PM3_SUCCESS) {
         PrintAndLogEx(FAILED, "Sector 0 failed to authenticate with MAD default key");
         PrintAndLogEx(HINT, "Verify that the tag NDEF formatted");
@@ -6720,7 +6953,7 @@ int CmdHFMFNDEFWrite(const char *Cmd) {
 
     // read MAD Sector 0, block1,2
     uint8_t sector0[MFBLOCK_SIZE * 4] = {0};
-    if (mfReadSector(MF_MAD1_SECTOR, MF_KEY_A, g_mifare_mad_key, sector0)) {
+    if (mf_read_sector(MF_MAD1_SECTOR, MF_KEY_A, g_mifare_mad_key, sector0)) {
         PrintAndLogEx(ERR, "error, reading sector 0. Card doesn't have MAD or doesn't have MAD on default keys");
         PrintAndLogEx(HINT, "Try " _YELLOW_("`hf mf ndefread -k `") " with your custom key");
         return PM3_ESOFT;
@@ -6729,7 +6962,7 @@ int CmdHFMFNDEFWrite(const char *Cmd) {
     // read MAD Sector 10, block1,2
     uint8_t sector10[MFBLOCK_SIZE * 4] = {0};
     if (m4) {
-        if (mfReadSector(MF_MAD2_SECTOR, MF_KEY_A, g_mifare_mad_key, sector10)) {
+        if (mf_read_sector(MF_MAD2_SECTOR, MF_KEY_A, g_mifare_mad_key, sector10)) {
             PrintAndLogEx(ERR, "error, reading sector 10. Card doesn't have MAD or doesn't have MAD on default keys");
             PrintAndLogEx(HINT, "Try " _YELLOW_("`hf mf ndefread -k `") " with your custom key");
             return PM3_ESOFT;
@@ -6791,10 +7024,11 @@ int CmdHFMFNDEFWrite(const char *Cmd) {
         }
 
         // write to card,  try B key first
-        if (mf_write_block(g_mifare_default_key, MF_KEY_B, block_no, block) == 0) {
+        if (mf_write_block(block_no,  MF_KEY_B, g_mifare_default_key, block) != PM3_SUCCESS) {
 
             // try A key,
-            if (mf_write_block(g_mifare_ndef_key, MF_KEY_A, block_no, block) == 0) {
+
+            if (mf_write_block(block_no, MF_KEY_A, g_mifare_ndef_key, block) != PM3_SUCCESS) {
                 return PM3_EFAILED;
             }
         }
@@ -6803,9 +7037,9 @@ int CmdHFMFNDEFWrite(const char *Cmd) {
 
         // find next available block
         block_no++;
+
         if (mfIsSectorTrailer(block_no)) {
             block_no++;
-
             // skip sectors which isn't ndef formatted
             while (freemem[mfSectorNum(block_no)] == 0) {
                 block_no++;
@@ -6949,7 +7183,7 @@ static int CmdHf14AGen3UID(const char *Cmd) {
 
     uint8_t old_uid[10] = {0};
 
-    int res = mfGen3UID(uid, uidlen, old_uid);
+    int res = mf_chinese_gen_3_uid(uid, uidlen, old_uid);
     if (res != PM3_SUCCESS) {
         PrintAndLogEx(ERR, "Can't set UID");
         PrintAndLogEx(HINT, "Are you sure your card is a Gen3 ?");
@@ -6989,7 +7223,7 @@ static int CmdHf14AGen3Block(const char *Cmd) {
     CLIParserFree(ctx);
 
     uint8_t new_block[MFBLOCK_SIZE] = {0x00};
-    int res = mfGen3Block(data, datalen, new_block);
+    int res = mf_chinese_gen_3_block(data, datalen, new_block);
     if (res) {
         PrintAndLogEx(ERR, "Can't change manufacturer block data. error %d", res);
         return PM3_ESOFT;
@@ -7020,7 +7254,7 @@ static int CmdHf14AGen3Freeze(const char *Cmd) {
         return PM3_SUCCESS;
     }
 
-    int res = mfGen3Freeze();
+    int res = mf_chinese_gen_3_freeze();
     if (res != PM3_SUCCESS) {
         PrintAndLogEx(ERR, "Can't lock UID changes. error %d", res);
     } else {
@@ -7149,8 +7383,9 @@ static int CmdHf14AMfSuperCard(const char *Cmd) {
 
     CLIParserFree(ctx);
 
+    // sanity checks
     if (res || (!res && uidlen && uidlen != sizeof(uid))) {
-        PrintAndLogEx(ERR, "UID must include 8 HEX symbols");
+        PrintAndLogEx(ERR, "UID must include 4 hex bytes");
         return PM3_EINVARG;
     }
 
@@ -7417,9 +7652,9 @@ static int CmdHF14AMfWipe(const char *Cmd) {
     char *fptr;
     if (keyfnlen == 0) {
         fptr = GenerateFilename("hf-mf-", "-key.bin");
-        if (fptr == NULL)
+        if (fptr == NULL) {
             return PM3_ESOFT;
-
+        }
         strncpy(keyFilename, fptr, sizeof(keyFilename) - 1);
         free(fptr);
     }
@@ -7445,6 +7680,14 @@ static int CmdHF14AMfWipe(const char *Cmd) {
             memcpy(mf, "\x11\x22\x33\x44\x44\x09\x04\x00\x62\x63\x64\x65\x66\x67\x68\x69", MFBLOCK_SIZE);
             break;
         }
+        case (MIFARE_1K_EV1_MAX_KEY_SIZE): {
+            PrintAndLogEx(INFO, "Loaded keys matching MIFARE Classic 1K Ev1");
+            memcpy(keyA, keys, (MIFARE_1K_EV1_MAXSECTOR * MIFARE_KEY_SIZE));
+            memcpy(keyB, keys + (MIFARE_1K_EV1_MAXSECTOR * MIFARE_KEY_SIZE), (MIFARE_1K_EV1_MAXSECTOR * MIFARE_KEY_SIZE));
+            num_sectors = NumOfSectors('1');
+            memcpy(mf, "\x11\x22\x33\x44\x44\x08\x04\x00\x62\x63\x64\x65\x66\x67\x68\x69", MFBLOCK_SIZE);
+            break;
+        }
         case (MIFARE_1K_MAX_KEY_SIZE): {
             PrintAndLogEx(INFO, "Loaded keys matching MIFARE Classic 1K");
             memcpy(keyA, keys, (MIFARE_1K_MAXSECTOR * MIFARE_KEY_SIZE));
@@ -7463,7 +7706,7 @@ static int CmdHF14AMfWipe(const char *Cmd) {
             break;
         }
         default: {
-            PrintAndLogEx(INFO, "wrong key file size");
+            PrintAndLogEx(INFO, "wrong key file size.  got %zu", keyslen);
             goto out;
         }
     }
@@ -7522,15 +7765,15 @@ static int CmdHF14AMfWipe(const char *Cmd) {
                 SendCommandMIX(CMD_HF_MIFARE_WRITEBL, mfFirstBlockOfSector(s) + b, kt, 0, data, sizeof(data));
                 PacketResponseNG resp;
                 if (WaitForResponseTimeout(CMD_ACK, &resp, 1500)) {
-                    uint8_t isOK  = resp.oldarg[0] & 0xff;
-                    if (isOK == 0) {
-                        PrintAndLogEx(NORMAL, "( " _RED_("fail") " )");
-                    } else {
-                        PrintAndLogEx(NORMAL, "( " _GREEN_("ok") " )");
+                    int8_t isOK = resp.oldarg[0];
+                    if (isOK == 1) {
+                        PrintAndLogEx(NORMAL, "- key %c ( " _GREEN_("ok") " )", (kt == MF_KEY_A) ? 'A' : 'B');
                         break;
+                    } else {
+                        PrintAndLogEx(NORMAL, "- key %c ( " _RED_("fail") " )", (kt == MF_KEY_A) ? 'A' : 'B');
                     }
                 } else {
-                    PrintAndLogEx(WARNING, "Command execute timeout");
+                    PrintAndLogEx(WARNING, "command execution time out");
                 }
             }
         }
@@ -7555,7 +7798,7 @@ static int CmdHF14AMfView(const char *Cmd) {
         arg_param_begin,
         arg_str1("f", "file", "<fn>", "Specify a filename for dump file"),
         arg_lit0("v", "verbose", "verbose output"),
-        arg_lit0(NULL, "sk", "Save extracted keys to file"),
+        arg_lit0(NULL, "sk", "Save extracted keys to binary file"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
@@ -7650,6 +7893,140 @@ static int CmdHF14AMfView(const char *Cmd) {
     return PM3_SUCCESS;
 }
 
+static int parse_gtu_cfg(uint8_t *d, size_t n) {
+
+    PrintAndLogEx(NORMAL, "");
+    PrintAndLogEx(INFO, "---------- " _CYAN_("GTU Gen4 Configuration") " -------------------------------------");
+    if (n != 30 && n != 32) {
+        PrintAndLogEx(INFO, "%s", sprint_hex_inrow(d, n));
+        PrintAndLogEx(INFO, "%zu bytes", n);
+        PrintAndLogEx(WARNING, "Unknown config format");
+        return PM3_SUCCESS;
+    }
+
+    PrintAndLogEx(INFO, _YELLOW_("%s"), sprint_hex_inrow(d, n));
+    PrintAndLogEx(INFO, "%zu bytes", n);
+    PrintAndLogEx(INFO, "");
+    PrintAndLogEx(INFO, _CYAN_("Config 1 - UID & modes"));
+    PrintAndLogEx(INFO, "%s", sprint_hex_inrow(d, 8));
+    PrintAndLogEx(INFO, "%02X.............. " NOLF, d[0]);
+    bool is_ul_enabled = (d[0] == 1);
+    switch (d[0]) {
+        case 0x00:
+            PrintAndLogEx(NORMAL, "MIFARE Classic mode");
+            break;
+        case 0x01:
+            PrintAndLogEx(NORMAL, "MIFARE Ultralight/NTAG mode");
+            break;
+        default:
+            PrintAndLogEx(NORMAL, _RED_("unknown"));
+            break;
+    }
+
+    PrintAndLogEx(INFO, "..%02X............ UID " NOLF, d[1]);
+
+    switch (d[1]) {
+        case 0x00:
+            PrintAndLogEx(NORMAL, _GREEN_("4") " byte");
+            break;
+        case 0x01:
+            PrintAndLogEx(NORMAL, _GREEN_("7") " byte");
+            break;
+        case 0x02:
+            PrintAndLogEx(NORMAL, _GREEN_("10") " byte");
+            break;
+        default:
+            PrintAndLogEx(NORMAL, _RED_("unknown"));
+            break;
+    }
+
+    PrintAndLogEx(INFO, "...." _YELLOW_("%s") ".... " _YELLOW_("Password"), sprint_hex_inrow(&d[2], 4));
+    PrintAndLogEx(INFO, "............%02X.. GTU mode " NOLF, d[6]);
+    switch (d[6]) {
+        case 0x00:
+            PrintAndLogEx(NORMAL, _GREEN_("pre-write") " - shadow data can be written");
+            break;
+        case 0x01:
+            PrintAndLogEx(NORMAL, _GREEN_("restore mode"));
+            break;
+        case 0x02:
+            PrintAndLogEx(NORMAL, "disabled");
+            break;
+        case 0x03:
+            PrintAndLogEx(NORMAL, "disabled, high speed R/W mode for Ultralight ?");
+            break;
+        default:
+            PrintAndLogEx(NORMAL, _RED_("unknown"));
+            break;
+    }
+
+    uint8_t atslen = d[7];
+    if (atslen == 0) {
+        PrintAndLogEx(INFO, ".............. ATS length %u bytes ( %s )", atslen, _YELLOW_("zero"));
+    } else if (atslen <= 16) {
+        PrintAndLogEx(INFO, ".............. ATS length %u bytes ( %s )", atslen, _GREEN_("ok"));
+    } else {
+        PrintAndLogEx(INFO, ".............. ATS length %u bytes ( %s )", atslen, _RED_("fail"));
+        atslen = 0;
+    }
+
+    PrintAndLogEx(INFO, "");
+
+    // ATS seems to have 16 bytes reserved
+    PrintAndLogEx(INFO, _CYAN_("Config 2 - ATS"));
+    PrintAndLogEx(INFO, "%s", sprint_hex_inrow(d + 8, 16));
+    if (atslen <= 16) {
+        PrintAndLogEx(INFO, "%s.............. ATS ( %d bytes )", sprint_hex_inrow(&d[8], d[7]), d[7]);
+        PrintAndLogEx(INFO, "..................%s Reserved for ATS", sprint_hex_inrow(d + 8 + d[7], 16 - d[7]));
+    } else {
+        PrintAndLogEx(INFO, "%s.............. %u Reserved for ATS", sprint_hex_inrow(&d[8], 16), 16);
+    }
+
+    PrintAndLogEx(INFO, "");
+    PrintAndLogEx(INFO, _CYAN_("Config 3 - Limits"));
+    PrintAndLogEx(INFO, "%s", sprint_hex_inrow(d + 24, (n - 24)));
+    PrintAndLogEx(INFO, "%02X%02X............ ATQA", d[24], d[25]);
+    PrintAndLogEx(INFO, "....%02X.......... SAK", d[26]);
+    PrintAndLogEx(INFO, "......%02X........ " NOLF, d[27]);
+    switch (d[27]) {
+        case 0x00:
+            PrintAndLogEx(NORMAL, "%s", (is_ul_enabled) ? _GREEN_("Ultralight EV1")  : "Ultralight Ev1");
+            break;
+        case 0x01:
+            PrintAndLogEx(NORMAL, "%s", (is_ul_enabled) ? _GREEN_("NTAG")  : "NTAG");
+            break;
+        case 0x02:
+            PrintAndLogEx(NORMAL, "%s", (is_ul_enabled) ? _GREEN_("Ultralight C")  : "Ultralight C");
+            break;
+        case 0x03:
+            PrintAndLogEx(NORMAL, "%s", (is_ul_enabled) ? _GREEN_("Ultralight")  : "Ultralight");
+            break;
+        default:
+            PrintAndLogEx(NORMAL, _RED_("unknown"));
+            break;
+    }
+
+    PrintAndLogEx(INFO, "........%02X...... Max R/W sectors", d[28]);
+    PrintAndLogEx(INFO, "..........%02X.... " NOLF, d[29]);
+    switch (d[29]) {
+        case 0x00:
+            PrintAndLogEx(NORMAL, _GREEN_("CUID enabled"));
+            break;
+        case 0x01:
+            PrintAndLogEx(NORMAL, "CUID disabled");
+            break;
+        case 0x02:
+            PrintAndLogEx(NORMAL, "Default value. Same behaviour as 00?");
+            break;
+        default:
+            PrintAndLogEx(NORMAL, _RED_("unknown"));
+            break;
+    }
+    PrintAndLogEx(INFO, "............%s unknown", sprint_hex_inrow(d + 30, n - 30));
+    PrintAndLogEx(INFO, "");
+    return PM3_SUCCESS;
+}
+
 // info about Gen4 GTU card
 static int CmdHF14AGen4Info(const char *cmd) {
     CLIParserContext *ctx;
@@ -7657,11 +8034,13 @@ static int CmdHF14AGen4Info(const char *cmd) {
                   "Read info about magic gen4 GTU card.",
                   "hf mf ginfo                  --> get info with default password 00000000\n"
                   "hf mf ginfo --pwd 01020304   --> get info with password\n"
+                  "hf mf ginfo -d 00000000000002090978009102BDAC19131011121314151604001800FF0002FD -v --> decode config block"
                  );
     void *argtable[] = {
         arg_param_begin,
         arg_lit0("v", "verbose", "verbose output"),
-        arg_str0("p", "pwd", "<hex>", "password 4bytes"),
+        arg_str0("p", "pwd", "<hex>", "password 4 bytes"),
+        arg_str0("d", "data", "<hex>", "config bytes 32 bytes"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, cmd, argtable, true);
@@ -7670,6 +8049,10 @@ static int CmdHF14AGen4Info(const char *cmd) {
     int pwd_len = 0;
     uint8_t pwd[4] = {0};
     CLIGetHexWithReturn(ctx, 2, pwd, &pwd_len);
+
+    int dlen = 0;
+    uint8_t data[32] = {0};
+    CLIGetHexWithReturn(ctx, 3, data, &dlen);
     CLIParserFree(ctx);
 
     if (pwd_len != 0 && pwd_len != 4) {
@@ -7679,156 +8062,74 @@ static int CmdHF14AGen4Info(const char *cmd) {
 
     uint8_t resp[40] = {0};
     size_t resplen = 0;
-    int res = mfG4GetConfig(pwd, resp, &resplen, verbose);
-    if (res != PM3_SUCCESS || resplen == 0) {
-        if (res == PM3_ETIMEOUT)
-            PrintAndLogEx(ERR, "No card in the field or card command timeout.");
-        else
-            PrintAndLogEx(ERR, "Error get config. Maybe not a Gen4 card?. error=%d rlen=%zu", res, resplen);
-        return PM3_ESOFT;
+    int res = 0;
+
+    if (dlen != 32) {
+        res = mfG4GetConfig(pwd, resp, &resplen, verbose);
+        if (res != PM3_SUCCESS || resplen == 0) {
+            if (res == PM3_ETIMEOUT)
+                PrintAndLogEx(ERR, "No card in the field or card command timeout.");
+            else
+                PrintAndLogEx(ERR, "Error get config. Maybe not a Gen4 card?. error=%d rlen=%zu", res, resplen);
+            return PM3_ESOFT;
+        }
+    } else {
+        memcpy(resp, data, dlen);
+        resplen = 32;
     }
 
-    PrintAndLogEx(INFO, "---------- Gen4 configuration ----------");
-    if (resplen != 30 && resplen != 32) {
-        PrintAndLogEx(INFO, "Raw config [%02zu] %s", resplen, sprint_hex_inrow(resp, resplen));
-        PrintAndLogEx(WARNING, "Unknown config format");
-        return PM3_SUCCESS;
-    }
-    if (verbose)
-        PrintAndLogEx(INFO, "Raw config [%02zu]..... %s", resplen, sprint_hex_inrow(resp, resplen));
-
-    PrintAndLogEx(INFO, "UL protocol......... %02x" NOLF, resp[0]);
-    switch (resp[0]) {
-        case 0x00:
-            PrintAndLogEx(NORMAL, " (MIFARE Classic mode)");
-            break;
-        case 0x01:
-            PrintAndLogEx(NORMAL, " (MIFARE Ultralight/NTAG mode)");
-            break;
-        default:
-            PrintAndLogEx(NORMAL, " (unknown %02x)", resp[0]);
-            break;
-    }
+    parse_gtu_cfg(resp, resplen);
 
     uint8_t uid_len = resp[1];
-    PrintAndLogEx(INFO, "UID length.......... %02x" NOLF, resp[1]);
-    switch (resp[1]) {
-        case 0x00:
-            PrintAndLogEx(NORMAL, " (4 byte)");
-            break;
-        case 0x01:
-            PrintAndLogEx(NORMAL, " (7 byte)");
-            break;
-        case 0x02:
-            PrintAndLogEx(NORMAL, " (10 byte)");
-            break;
-        default:
-            PrintAndLogEx(NORMAL, " (unknown %02x)", resp[1]);
-            break;
-    }
-
-    PrintAndLogEx(INFO, "Password............ %s", sprint_hex_inrow(&resp[2], 4));
-
-    PrintAndLogEx(INFO, "GTU mode............ %02x" NOLF, resp[6]);
-    switch (resp[6]) {
-        case 0x00:
-            PrintAndLogEx(NORMAL, " (pre-write, shadow data can be written)");
-            break;
-        case 0x01:
-            PrintAndLogEx(NORMAL, " (restore mode)");
-            break;
-        case 0x02:
-            PrintAndLogEx(NORMAL, " (disabled)");
-            break;
-        case 0x03:
-            PrintAndLogEx(NORMAL, " (disabled, high speed R/W mode for Ultralight?)");
-            break;
-        default:
-            PrintAndLogEx(NORMAL, " (unknown %02x)", resp[6]);
-            break;
-    }
-
-    PrintAndLogEx(INFO, "ATS [%02d]............ %s", resp[7], sprint_hex_inrow(&resp[8], resp[7]));
-    PrintAndLogEx(INFO, "ATQA................ %02x%02x", resp[25], resp[24]);
-    PrintAndLogEx(INFO, "SAK................. %02x", resp[26]);
-
-    PrintAndLogEx(INFO, "UL mode............. %02x" NOLF, resp[27]);
-    switch (resp[27]) {
-        case 0x00:
-            PrintAndLogEx(NORMAL, " (UL EV1)");
-            break;
-        case 0x01:
-            PrintAndLogEx(NORMAL, " (NTAG)");
-            break;
-        case 0x02:
-            PrintAndLogEx(NORMAL, " (UL-C)");
-            break;
-        case 0x03:
-            PrintAndLogEx(NORMAL, " (UL)");
-            break;
-        default:
-            PrintAndLogEx(NORMAL, " (unknown %02x)", resp[27]);
-            break;
-    }
-
-    PrintAndLogEx(INFO, "max rd/wr sectors... %02x", resp[28]);
-    PrintAndLogEx(INFO, "block0 direct wr.... %02x" NOLF, resp[29]);
-    switch (resp[29]) {
-        case 0x00:
-            PrintAndLogEx(NORMAL, " (Activate direct write to block 0 (Same behaviour of Gen2 cards. Some readers may identify the card as magic))");
-            break;
-        case 0x01:
-            PrintAndLogEx(NORMAL, " (Deactivate direct write to block 0 (Same behaviour of vanilla cards))");
-            break;
-        case 0x02:
-            PrintAndLogEx(NORMAL, " (Default value. Same behaviour as 00?");
-            break;
-        default:
-            PrintAndLogEx(NORMAL, " (unknown %02x)", resp[29]);
-            break;
-    }
 
     res = mfG4GetFactoryTest(pwd, resp, &resplen, false);
     if (res == PM3_SUCCESS && resplen > 2) {
+        PrintAndLogEx(INFO, "");
+        PrintAndLogEx(INFO, _CYAN_("Factory test"));
         if (verbose) {
-            PrintAndLogEx(INFO, "");
-            PrintAndLogEx(INFO, "Raw test [%02zu]....... %s", resplen, sprint_hex_inrow(resp, resplen));
+            PrintAndLogEx(INFO, "Raw......... %s", sprint_hex_inrow(resp, resplen));
         }
 
-        if (resp[resplen - 2] == 0x66 && resp[resplen - 1] == 0x66)
-            PrintAndLogEx(INFO, "Card type........... generic");
-        else if (resp[resplen - 2] == 0x02 && resp[resplen - 1] == 0xaa)
-            PrintAndLogEx(INFO, "Card type........... limited functionality");
-        else if (resp[resplen - 2] == 0x03 && resp[resplen - 1] == 0xa0)
-            PrintAndLogEx(INFO, "Card type........... old card version");
-        else if (resp[resplen - 2] == 0x06 && resp[resplen - 1] == 0xa0)
-            PrintAndLogEx(INFO, "Card type........... new card version");
-        else
-            PrintAndLogEx(INFO, "Card type........... unknown %02x%02x", resp[resplen - 2], resp[resplen - 1]);
+        if (memcmp(resp + resplen - 2, "\x66\x66", 2) == 0) {
+            PrintAndLogEx(INFO, "Card type... Generic");
+
+        } else if (memcmp(resp + resplen - 2, "\x02\xAA", 2) == 0) {
+            PrintAndLogEx(INFO, "Card type... " _RED_("Limited functionality"));
+
+        } else if (memcmp(resp + resplen - 2, "\x03\xA0", 2) == 0) {
+            PrintAndLogEx(INFO, "Card type... Old card version");
+
+        } else if (memcmp(resp + resplen - 2, "\x06\xA0", 2) == 0) {
+            PrintAndLogEx(INFO, "Card type... " _GREEN_("New card version"));
+
+        } else {
+            PrintAndLogEx(INFO, "Card type... " _RED_("unknown %02X%02X"), resp[resplen - 2], resp[resplen - 1]);
+        }
     }
 
     // read block 0
     res = mfG4GetBlock(pwd, 0, resp, MAGIC_INIT | MAGIC_OFF);
     if (res == PM3_SUCCESS) {
         PrintAndLogEx(INFO, "");
-        PrintAndLogEx(INFO, "Block 0............. %s", sprint_hex_inrow(resp, 16));
+        PrintAndLogEx(INFO, _CYAN_("Block 0 test"));
+        PrintAndLogEx(INFO, "Block 0..... %s", sprint_hex_inrow(resp, 16));
 
         switch (uid_len) {
             case 0x00:
-                PrintAndLogEx(INFO, "UID [4]............. %s", sprint_hex(resp, 4));
+                PrintAndLogEx(INFO, "UID [4]..... %s", sprint_hex_inrow(resp, 4));
                 break;
             case 0x01:
-                PrintAndLogEx(INFO, "UID [7]............. %s", sprint_hex(resp, 7));
+                PrintAndLogEx(INFO, "UID [7]..... %s", sprint_hex_inrow(resp, 7));
                 break;
             case 0x02:
-                PrintAndLogEx(INFO, "UID [10]............ %s", sprint_hex(resp, 10));
+                PrintAndLogEx(INFO, "UID [10..... %s", sprint_hex_inrow(resp, 10));
                 break;
             default:
                 break;
         }
     }
 
-
+    PrintAndLogEx(NORMAL, "");
     return PM3_SUCCESS;
 }
 
@@ -8405,7 +8706,7 @@ static int CmdHF14AGen4Save(const char *Cmd) {
         int cnt = 0;
         uint16_t bytes_left = bytes ;
 
-        // 12 is the size of the struct the fct mfEmlSetMem_xt uses to transfer to device
+        // 12 is the size of the struct the fct mf_eml_set_mem_xt uses to transfer to device
         uint16_t max_avail_blocks = ((PM3_CMD_DATA_SIZE - 12) / MFBLOCK_SIZE) * MFBLOCK_SIZE;
 
         while (bytes_left > 0 && cnt < block_cnt) {
@@ -8417,7 +8718,7 @@ static int CmdHF14AGen4Save(const char *Cmd) {
             uint16_t chunk_size = MIN(max_avail_blocks, bytes_left);
             uint16_t blocks_to_send = chunk_size / MFBLOCK_SIZE;
 
-            if (mfEmlSetMem_xt(dump + offset, cnt, blocks_to_send, MFBLOCK_SIZE) != PM3_SUCCESS) {
+            if (mf_eml_set_mem_xt(dump + offset, cnt, blocks_to_send, MFBLOCK_SIZE) != PM3_SUCCESS) {
                 PrintAndLogEx(FAILED, "Can't set emulator mem at block: %3d", cnt);
                 free(dump);
                 return PM3_ESOFT;
@@ -8496,7 +8797,8 @@ static int CmdHF14AGen4ChangePwd(const char *Cmd) {
 }
 
 static void parse_gdm_cfg(const uint8_t *d) {
-    PrintAndLogEx(SUCCESS, "------------------- " _CYAN_("GDM Configuration") " -----------------------------------------");
+    PrintAndLogEx(NORMAL, "");
+    PrintAndLogEx(SUCCESS, "------------------- " _CYAN_("GDM Gen4 Configuration") " -----------------------------------------");
     PrintAndLogEx(SUCCESS,  _YELLOW_("%s"), sprint_hex_inrow(d, MFBLOCK_SIZE));
     PrintAndLogEx(SUCCESS,  _YELLOW_("%02X%02X") "............................ %s %s"
                   , d[0]
@@ -8504,10 +8806,10 @@ static void parse_gdm_cfg(const uint8_t *d) {
                   , (d[0] == 0x85 && d[1] == 0x00) ? "Magic wakeup disabled" : _GREEN_("Magic wakeup enabled")
                   , (d[0] == 0x85 && d[1] == 0x00) ? "" : ((d[0] == 0x7A && d[1] == 0xFF) ? _GREEN_("with GDM cfg block access") : _RED_(", no GDM cfg block access"))
                  );
-    PrintAndLogEx(SUCCESS, "...." _YELLOW_("%02X") ".......................... Magic wakeup style %s", d[2], ((d[2] == 0x85) ? "GDM 20(7)/23" : "Gen1a 40(7)/43"));
-    PrintAndLogEx(SUCCESS, "......" _YELLOW_("%02X%02X%02X") ".................... n/a", d[3], d[4], d[5]);
+    PrintAndLogEx(SUCCESS, "...." _YELLOW_("%02X") ".......................... Magic wakeup style " _YELLOW_("%s"), d[2], ((d[2] == 0x85) ? "GDM 20(7)/23" : "Gen1a 40(7)/43"));
+    PrintAndLogEx(SUCCESS, "......" _YELLOW_("%02X%02X%02X") ".................... unknown", d[3], d[4], d[5]);
     PrintAndLogEx(SUCCESS, "............" _YELLOW_("%02X") ".................. %s", d[6], (d[6] == 0x5A) ? "Key B use blocked when readable by ACL" : "Key B use allowed when readable by ACL");
-    PrintAndLogEx(SUCCESS, ".............." _YELLOW_("%02X") "................ %s", d[7], (d[7] == 0x5A) ? _GREEN_("CUID - Block 0 Direct Write Enabled") : "CUID - Block 0 Direct Write Disabled");
+    PrintAndLogEx(SUCCESS, ".............." _YELLOW_("%02X") "................ %s", d[7], (d[7] == 0x5A) ? _GREEN_("CUID enabled") : "CUID Disabled");
     PrintAndLogEx(SUCCESS, "................" _YELLOW_("%02X") ".............. n/a", d[8]);
 
     const char *pers;
@@ -8531,13 +8833,14 @@ static void parse_gdm_cfg(const uint8_t *d) {
             pers = "4B UID from Block 0";
             break;
     }
-    PrintAndLogEx(SUCCESS, ".................." _YELLOW_("%02X") "............ MFC EV1 perso... " _YELLOW_("%s"), d[9], pers);
+    PrintAndLogEx(SUCCESS, ".................." _YELLOW_("%02X") "............ MFC EV1 perso. " _YELLOW_("%s"), d[9], pers);
     PrintAndLogEx(SUCCESS, "...................." _YELLOW_("%02X") ".......... %s", d[10], (d[10] == 0x5A) ? _GREEN_("Shadow mode enabled") : "Shadow mode disabled");
     PrintAndLogEx(SUCCESS, "......................" _YELLOW_("%02X") "........ %s", d[11], (d[11] == 0x5A) ? _GREEN_("Magic auth enabled") : "Magic auth disabled");
     PrintAndLogEx(SUCCESS, "........................" _YELLOW_("%02X") "...... %s", d[12], (d[12] == 0x5A) ? _GREEN_("Static encrypted nonce enabled") : "Static encrypted nonce disabled");
     PrintAndLogEx(SUCCESS, ".........................." _YELLOW_("%02X") ".... %s", d[13], (d[13] == 0x5A) ? _GREEN_("MFC EV1 signature enabled") : "MFC EV1 signature disabled");
     PrintAndLogEx(SUCCESS, "............................" _YELLOW_("%02X") ".. n/a", d[14]);
     PrintAndLogEx(SUCCESS, ".............................." _YELLOW_("%02X") " SAK", d[15]);
+    PrintAndLogEx(NORMAL, "");
 }
 
 static int CmdHF14AGen4_GDM_ParseCfg(const char *Cmd) {
@@ -8627,7 +8930,7 @@ static int CmdHF14AGen4_GDM_Cfg(const char *Cmd) {
     SendCommandNG(CMD_HF_MIFARE_READBL_EX, (uint8_t *)&payload, sizeof(payload));
     PacketResponseNG resp;
     if (WaitForResponseTimeout(CMD_HF_MIFARE_READBL_EX, &resp, 1500) == false) {
-        PrintAndLogEx(WARNING, "command execute timeout");
+        PrintAndLogEx(WARNING, "command execution time out");
         return PM3_ETIMEOUT;
     }
 
@@ -8708,7 +9011,7 @@ static int CmdHF14AGen4_GDM_SetCfg(const char *Cmd) {
     SendCommandNG(CMD_HF_MIFARE_WRITEBL_EX, (uint8_t *)&payload, sizeof(payload));
     PacketResponseNG resp;
     if (WaitForResponseTimeout(CMD_HF_MIFARE_WRITEBL_EX, &resp, 1500) == false) {
-        PrintAndLogEx(WARNING, "command execute timeout");
+        PrintAndLogEx(WARNING, "command execution time out");
         return PM3_ETIMEOUT;
     }
 
@@ -8791,7 +9094,7 @@ static int CmdHF14AGen4_GDM_SetBlk(const char *Cmd) {
     SendCommandNG(CMD_HF_MIFARE_G4_GDM_WRBL, (uint8_t *)&payload, sizeof(payload));
     PacketResponseNG resp;
     if (WaitForResponseTimeout(CMD_HF_MIFARE_G4_GDM_WRBL, &resp, 1500) == false) {
-        PrintAndLogEx(WARNING, "command execute timeout");
+        PrintAndLogEx(WARNING, "command execution time out");
         return PM3_ETIMEOUT;
     }
 
@@ -8844,19 +9147,19 @@ static int CmdHF14AMfValue(const char *Cmd) {
     uint8_t keytype = MF_KEY_A;
     if (arg_get_lit(ctx, 2) && arg_get_lit(ctx, 3)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single input key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 3)) {
-        keytype = MF_KEY_B;;
+        keytype = MF_KEY_B;
     }
 
     uint8_t transferkeytype = MF_KEY_A;
     if (arg_get_lit(ctx, 9) && arg_get_lit(ctx, 10)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single transfer key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 10)) {
-        transferkeytype = MF_KEY_B;;
+        transferkeytype = MF_KEY_B;
     }
 
     int keylen = 0;
@@ -9010,7 +9313,11 @@ static int CmdHF14AMfValue(const char *Cmd) {
 
             } else {
                 cmddata[10] = 0;
-                PrintAndLogEx(INFO, "Writing block no %u, key %c - %s", blockno, (keytype == MF_KEY_B) ? 'B' : 'A', sprint_hex_inrow(key, sizeof(key)));
+                if (keytype < 2) {
+                    PrintAndLogEx(INFO, "Writing block no %u, key type:%c - %s", blockno, (keytype == MF_KEY_B) ? 'B' : 'A', sprint_hex_inrow(key, sizeof(key)));
+                } else {
+                    PrintAndLogEx(INFO, "Writing block no %u, key type:%02x - %s", blockno, MIFARE_AUTH_KEYA + keytype, sprint_hex_inrow(key, sizeof(key)));
+                }
             }
 
             memcpy(cmddata + 11, block, sizeof(block));
@@ -9020,7 +9327,7 @@ static int CmdHF14AMfValue(const char *Cmd) {
 
             PacketResponseNG resp;
             if (WaitForResponseTimeout(CMD_ACK, &resp, 1500) == false) {
-                PrintAndLogEx(FAILED, "Command execute timeout");
+                PrintAndLogEx(FAILED, "command execution time out");
                 return PM3_ETIMEOUT;
             }
             isok = resp.oldarg[0] & 0xff;
@@ -9045,7 +9352,7 @@ static int CmdHF14AMfValue(const char *Cmd) {
 
             PacketResponseNG resp;
             if (WaitForResponseTimeout(CMD_ACK, &resp, 1500) == false) {
-                PrintAndLogEx(FAILED, "Command execute timeout");
+                PrintAndLogEx(FAILED, "command execution time out");
                 return PM3_ETIMEOUT;
             }
 
@@ -9071,12 +9378,12 @@ static int CmdHF14AMfValue(const char *Cmd) {
             // already have data from command line
         } else {
             if (trnval == -1) {
-                res = mfReadBlock(blockno, keytype, key, data);
+                res = mf_read_block(blockno, keytype, key, data);
             } else {
                 if (mfSectorNum(trnval) != mfSectorNum(blockno))
-                    res = mfReadBlock(trnval, transferkeytype, transferkey, data);
+                    res = mf_read_block(trnval, transferkeytype, transferkey, data);
                 else
-                    res = mfReadBlock(trnval, keytype, key, data);
+                    res = mf_read_block(trnval, keytype, key, data);
             }
         }
 
@@ -9115,8 +9422,8 @@ static int CmdHFMFHidEncode(const char *Cmd) {
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
 
-    int bin_len = 120;
     uint8_t bin[121] = {0};
+    int bin_len = sizeof(bin) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     CLIGetStrWithReturn(ctx, 1, bin, &bin_len);
 
     wiegand_card_t card;
@@ -9202,8 +9509,8 @@ static int CmdHFMFHidEncode(const char *Cmd) {
             PrintAndLogEx(INFO, "Writing %u - %s", (i + 1), sprint_hex_inrow(blocks + (i * MFBLOCK_SIZE), MFBLOCK_SIZE));
         }
 
-        if (mf_write_block(empty, MF_KEY_A, (i + 1), blocks + (i * MFBLOCK_SIZE)) == false) {
-            if (mf_write_block(empty, MF_KEY_B, (i + 1), blocks + (i * MFBLOCK_SIZE)) == false) {
+        if (mf_write_block((i + 1), MF_KEY_A, empty, blocks + (i * MFBLOCK_SIZE)) == PM3_EFAILED) {
+            if (mf_write_block((i + 1), MF_KEY_B, empty, blocks + (i * MFBLOCK_SIZE)) == PM3_EFAILED) {
                 PrintAndLogEx(WARNING, "failed writing block %d using default empty key", (i + 1));
                 res = false;
                 break;
@@ -9244,14 +9551,14 @@ static int CmdHF14AMfInfo(const char *Cmd) {
     uint8_t keytype = MF_KEY_A;
     if (arg_get_lit(ctx, 2) && arg_get_lit(ctx, 3)) {
         CLIParserFree(ctx);
-        PrintAndLogEx(WARNING, "Input key type must be A or B");
+        PrintAndLogEx(WARNING, "Choose one single input key type");
         return PM3_EINVARG;
     } else if (arg_get_lit(ctx, 3)) {
         keytype = MF_KEY_B;
     }
 
     int keylen = 0;
-    uint8_t key[10 * MIFARE_KEY_SIZE] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    uint8_t key[100 * MIFARE_KEY_SIZE] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     CLIGetHexWithReturn(ctx, 4, key, &keylen);
 
     bool do_nack_test = arg_get_lit(ctx, 5);
@@ -9298,7 +9605,6 @@ static int CmdHF14AMfInfo(const char *Cmd) {
         if (verbose) {
             PrintAndLogEx(SUCCESS, "ATQA: %02X %02X", card.atqa[1], card.atqa[0]);
         }
-
         return select_status;
     }
 
@@ -9308,7 +9614,7 @@ static int CmdHF14AMfInfo(const char *Cmd) {
     PrintAndLogEx(SUCCESS, "ATQA: " _GREEN_("%02X %02X"), card.atqa[1], card.atqa[0]);
     PrintAndLogEx(SUCCESS, " SAK: " _GREEN_("%02X [%" PRIu64 "]"), card.sak, resp.oldarg[0]);
 
-    if (setDeviceDebugLevel(verbose ? DBG_INFO : DBG_NONE, false) != PM3_SUCCESS) {
+    if (setDeviceDebugLevel(verbose ? MAX(dbg_curr, DBG_INFO) : DBG_NONE, false) != PM3_SUCCESS) {
         return PM3_EFAILED;
     }
 
@@ -9321,23 +9627,8 @@ static int CmdHF14AMfInfo(const char *Cmd) {
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, "--- " _CYAN_("Keys Information"));
 
-    /*
-    1. fast check for different KDF here
-    2. mew command "hf mf keygen"
-
-    " Vingcard algo");
-    PrintAndLogEx(INFO, " Saflok algo");
-    PrintAndLogEx(INFO, " SALTO algo");
-    uint64_t key = 0;
-    mfc_algo_saflok_one(uid, 1, 0, &key);
-    PrintAndLogEx(INFO, " Dorma Kaba algo    | %012X" PRIX64, key);
-    PrintAndLogEx(INFO, " STiD algo");
-    PrintAndLogEx(INFO, "-------------------------------------");
-    */
-
-
     uint8_t fkey[MIFARE_KEY_SIZE] = {0};
-    uint8_t fKeyType = 0xff;
+    uint8_t fKeyType = 0xFF;
 
     uint64_t tmpkey = 0;
     mfc_algo_saflok_one(card.uid, 0, MF_KEY_A, &tmpkey);
@@ -9346,7 +9637,7 @@ static int CmdHF14AMfInfo(const char *Cmd) {
     int sectorsCnt = 2;
     uint8_t *keyBlock = NULL;
     uint32_t keycnt = 0;
-    res = mf_load_keys(&keyBlock, &keycnt, key, MIFARE_KEY_SIZE * 2, NULL, 0);
+    res = mf_load_keys(&keyBlock, &keycnt, key, MIFARE_KEY_SIZE * 2, NULL, 0, true);
     if (res != PM3_SUCCESS) {
         return res;
     }
@@ -9358,15 +9649,15 @@ static int CmdHF14AMfInfo(const char *Cmd) {
         return PM3_EMALLOC;
     }
 
-    res = mfCheckKeys_fast(sectorsCnt, true, true, 1, keycnt, keyBlock, e_sector, false, verbose);
+    uint8_t blockdata[MFBLOCK_SIZE] = {0};
+    res = mf_check_keys_fast(sectorsCnt, true, true, 1, keycnt, keyBlock, e_sector, false, verbose);
     if (res == PM3_SUCCESS || res == PM3_EPARTIAL) {
-        uint8_t blockdata[MFBLOCK_SIZE] = {0};
 
         if (e_sector[0].foundKey[MF_KEY_A]) {
             PrintAndLogEx(SUCCESS, "Sector 0 key A... " _GREEN_("%012" PRIX64), e_sector[0].Key[MF_KEY_A]);
 
             num_to_bytes(e_sector[0].Key[MF_KEY_A], MIFARE_KEY_SIZE, fkey);
-            if (mfReadBlock(0, MF_KEY_A, key, blockdata) == PM3_SUCCESS) {
+            if (mf_read_block(0, MF_KEY_A, key, blockdata) == PM3_SUCCESS) {
                 fKeyType = MF_KEY_A;
             }
         }
@@ -9376,7 +9667,7 @@ static int CmdHF14AMfInfo(const char *Cmd) {
 
             if (fKeyType == 0xFF) {
                 num_to_bytes(e_sector[0].Key[MF_KEY_B], MIFARE_KEY_SIZE, fkey);
-                if (mfReadBlock(0, MF_KEY_B, key, blockdata) == PM3_SUCCESS) {
+                if (mf_read_block(0, MF_KEY_B, key, blockdata) == PM3_SUCCESS) {
                     fKeyType = MF_KEY_B;
                 }
             }
@@ -9385,35 +9676,113 @@ static int CmdHF14AMfInfo(const char *Cmd) {
         if (e_sector[1].foundKey[MF_KEY_A]) {
             PrintAndLogEx(SUCCESS, "Sector 1 key A... " _GREEN_("%012" PRIX64), e_sector[1].Key[MF_KEY_A]);
         }
+    }
 
-        if (fKeyType != 0xFF) {
-            PrintAndLogEx(SUCCESS, "Block 0.......... %s", sprint_hex(blockdata, MFBLOCK_SIZE));
-        }
+    uint8_t k08s[6] = {0xA3, 0x96, 0xEF, 0xA4, 0xE2, 0x4F};
+    uint8_t k08[6] = {0xA3, 0x16, 0x67, 0xA8, 0xCE, 0xC1};
+    uint8_t k32[6] = {0x51, 0x8B, 0x33, 0x54, 0xE7, 0x60};
+    if (mf_read_block(0, 4, k08s, blockdata) == PM3_SUCCESS) {
+        PrintAndLogEx(SUCCESS, "Backdoor key..... " _YELLOW_("%s"), sprint_hex_inrow(k08s, sizeof(k08s)));
+        fKeyType = MF_KEY_BD;
+        memcpy(fkey, k08s, sizeof(fkey));
 
-        PrintAndLogEx(NORMAL, "");
-        PrintAndLogEx(INFO, "--- " _CYAN_("Fingerprint"));
-        if (
-            (blockdata[8] == 0x03 && blockdata[15] == 0x90) ||
-            (blockdata[9] == 0x02 && blockdata[14] == 0x1D) ||
-            (blockdata[8] == 0x04 && blockdata[15] == 0x90) ||
-            (memcmp(blockdata + 8, "\x62\x63\x64\x65\x66\x67\x68\x69", 8) == 0)
-        ) {
-            PrintAndLogEx(SUCCESS, "FUDAN detected");
-        }
+    } else if (mf_read_block(0, 4, k08, blockdata) == PM3_SUCCESS) {
+        PrintAndLogEx(SUCCESS, "Backdoor key..... " _YELLOW_("%s"), sprint_hex_inrow(k08, sizeof(k08)));
+        fKeyType = MF_KEY_BD;
+        memcpy(fkey, k08, sizeof(fkey));
+    } else if (mf_read_block(0, 4, k32, blockdata) == PM3_SUCCESS) {
+        PrintAndLogEx(SUCCESS, "Backdoor key..... " _YELLOW_("%s"), sprint_hex_inrow(k32, sizeof(k32)));
+        fKeyType = MF_KEY_BD;
+        memcpy(fkey, k32, sizeof(fkey));
+    }
+
+    if (fKeyType != 0xFF) {
+        PrintAndLogEx(SUCCESS, "Block 0.... %s | " NOLF, sprint_hex_inrow(blockdata, MFBLOCK_SIZE));
+        PrintAndLogEx(NORMAL, "%s", sprint_ascii(blockdata + 8, 8));
+    }
+
+    PrintAndLogEx(NORMAL, "");
+    PrintAndLogEx(INFO, "--- " _CYAN_("Fingerprint"));
+
+    if (fKeyType != 0xFF) {
+        // cards with known backdoor
+        if (card.sak != 0x20  && memcmp(blockdata + 8, "\x62\x63\x64\x65\x66\x67\x68\x69", 8) == 0) {
+            // backdoor might be present, or just a clone reusing Fudan MF data...
+            PrintAndLogEx(SUCCESS, "Fudan based card");
+        } else if (fKeyType == MF_KEY_BD && memcmp(fkey, k08s, sizeof(fkey)) == 0
+                   && card.sak == 0x08 && memcmp(blockdata + 5, "\x08\x04\x00", 3) == 0
+                   && (blockdata[8] == 0x03 || blockdata[8] == 0x04) && blockdata[15] == 0x90) {
+            PrintAndLogEx(SUCCESS, "Fudan FM11RF08S");
+        } else if (fKeyType == MF_KEY_BD && memcmp(fkey, k08s, sizeof(fkey)) == 0
+                   && card.sak == 0x08 && memcmp(blockdata + 5, "\x00\x03\x00\x10", 4) == 0
+                   && blockdata[15] == 0x90) {
+            PrintAndLogEx(SUCCESS, "Fudan FM11RF08S-7B");
+        } else if (fKeyType == MF_KEY_BD && memcmp(fkey, k08, sizeof(fkey)) == 0
+                   && card.sak == 0x08 && memcmp(blockdata + 5, "\x08\x04\x00", 3) == 0
+                   && blockdata[15] == 0x98) {
+            PrintAndLogEx(SUCCESS, "Fudan FM11RF08S **98");
+        } else if (fKeyType == MF_KEY_BD && memcmp(fkey, k08, sizeof(fkey)) == 0
+                   && card.sak == 0x08 && memcmp(blockdata + 5, "\x08\x04\x00", 3) == 0
+                   && (blockdata[8] >= 0x01 && blockdata[8] <= 0x03) && blockdata[15] == 0x1D) {
+            PrintAndLogEx(SUCCESS, "Fudan FM11RF08");
+        } else if (fKeyType == MF_KEY_BD && memcmp(fkey, k32, sizeof(fkey)) == 0
+                   && card.sak == 0x18 && memcmp(blockdata + 5, "\x18\x02\x00\x46\x44\x53\x37\x30\x56\x30\x31", 11) == 0) {
+            PrintAndLogEx(SUCCESS, "Fudan FM11RF32");
+        } else if (fKeyType == MF_KEY_BD && memcmp(fkey, k08, sizeof(fkey)) == 0
+                   && card.sak == 0x20 && memcmp(blockdata + 8, "\x62\x63\x64\x65\x66\x67\x68\x69", 8) == 0) {
+            PrintAndLogEx(SUCCESS, "Fudan FM11RF32 (SAK=20)");
+        } else if (fKeyType == MF_KEY_BD && memcmp(fkey, k08, sizeof(fkey)) == 0
+                   && card.sak == 0x28 && (
+                       (memcmp(blockdata + 5, "\x28\x04\x00\x90\x10\x15\x01\x00\x00\x00\x00", 11) == 0) ||
+                       (memcmp(blockdata + 5, "\x28\x04\x00\x90\x11\x15\x01\x00\x00\x00\x00", 11) == 0))) {
+            // Note: it also has ATS =
+            // 10 78 80 90 02 20 90 00 00 00 00 00 + UID + CRC
+            PrintAndLogEx(SUCCESS, "Fudan FM1208-10");
+        } else if (fKeyType == MF_KEY_BD && memcmp(fkey, k08, sizeof(fkey)) == 0
+                   && card.sak == 0x28 && memcmp(blockdata + 5, "\x28\x04\x00\x90\x53\xB7\x0C\x00\x00\x00\x00", 11) == 0) {
+            // Note: it also has ATS =
+            // 10 78 80 B0 02 20 90 00 00 00 00 00 + UID + CRC
+            PrintAndLogEx(SUCCESS, "Fudan FM1216-137");
+        } else if (fKeyType == MF_KEY_BD && memcmp(fkey, k08, sizeof(fkey)) == 0
+                   && card.sak == 0x88 && memcmp(blockdata + 5, "\x88\x04\x00\x43", 4) == 0) {
+            PrintAndLogEx(SUCCESS, "Infineon SLE66R35");
+        } else if (fKeyType == MF_KEY_BD && memcmp(fkey, k08, sizeof(fkey)) == 0
+                   && card.sak == 0x08 && memcmp(blockdata + 5, "\x88\x04\x00\x44", 4) == 0) {
+            PrintAndLogEx(SUCCESS, "NXP MF1ICS5003");
+        } else if (fKeyType == MF_KEY_BD && memcmp(fkey, k08, sizeof(fkey)) == 0
+                   && card.sak == 0x08 && memcmp(blockdata + 5, "\x88\x04\x00\x45", 4) == 0) {
+            PrintAndLogEx(SUCCESS, "NXP MF1ICS5004");
+        } else if (fKeyType == MF_KEY_BD) {
+            PrintAndLogEx(SUCCESS, _RED_("Unknown card with backdoor, please report details!"));
+        } else
+            // other cards
+            if (card.sak == 0x08 && memcmp(blockdata + 5, "\x88\x04\x00\x46", 4) == 0) {
+                PrintAndLogEx(SUCCESS, "NXP MF1ICS5005");
+            } else if (card.sak == 0x08 && memcmp(blockdata + 5, "\x88\x04\x00\x47", 4) == 0) {
+                PrintAndLogEx(SUCCESS, "NXP MF1ICS5006");
+            } else if (card.sak == 0x09 && memcmp(blockdata + 5, "\x89\x04\x00\x47", 4) == 0) {
+                PrintAndLogEx(SUCCESS, "NXP MF1ICS2006");
+            } else if (card.sak == 0x08 && memcmp(blockdata + 5, "\x88\x04\x00\x48", 4) == 0) {
+                PrintAndLogEx(SUCCESS, "NXP MF1ICS5007");
+            } else if (card.sak == 0x08 && memcmp(blockdata + 5, "\x88\x04\x00\xc0", 4) == 0) {
+                PrintAndLogEx(SUCCESS, "NXP MF1ICS5035");
+            } else {
+                PrintAndLogEx(SUCCESS, "unknown");
+            }
 
         if (e_sector[1].foundKey[MF_KEY_A] && (e_sector[1].Key[MF_KEY_A] == 0x2A2C13CC242A)) {
             PrintAndLogEx(SUCCESS, "Dorma Kaba SAFLOK detected");
         }
 
     } else {
-        PrintAndLogEx(INFO, "<N/A>");
+        PrintAndLogEx(INFO, "<n/a>");
     }
 
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(INFO, "--- " _CYAN_("Magic Tag Information"));
     if (detect_mf_magic(true, MF_KEY_B, e_sector[0].Key[MF_KEY_B]) == MAGIC_FLAG_NONE) {
         if (detect_mf_magic(true, MF_KEY_A, e_sector[0].Key[MF_KEY_A]) == MAGIC_FLAG_NONE) {
-            PrintAndLogEx(INFO, "<N/A>");
+            PrintAndLogEx(INFO, "<n/a>");
         }
     }
 
@@ -9428,40 +9797,42 @@ static int CmdHF14AMfInfo(const char *Cmd) {
         PrintAndLogEx(SUCCESS, "Static nonce......... " _YELLOW_("yes"));
     }
 
-    if (res == NONCE_FAIL && verbose) {
-        PrintAndLogEx(SUCCESS, "Static nonce......... " _RED_("read failed"));
-    }
 
     if (res == NONCE_NORMAL) {
         // not static
         res = detect_classic_prng();
-        if (res == 1)
-            PrintAndLogEx(SUCCESS, "Prng................. " _GREEN_("weak"));
-        else if (res == 0)
-            PrintAndLogEx(SUCCESS, "Prng................. " _YELLOW_("hard"));
-        else
-            PrintAndLogEx(FAILED, "Prng................. " _RED_("fail"));
-
+        if (res == 1) {
+            PrintAndLogEx(SUCCESS, "Prng....... " _GREEN_("weak"));
+        } else if (res == 0) {
+            PrintAndLogEx(SUCCESS, "Prng....... " _YELLOW_("hard"));
+        } else {
+            PrintAndLogEx(FAILED, "Prng........ " _RED_("fail"));
+        }
 
         // detect static encrypted nonce
         if (keylen == MIFARE_KEY_SIZE) {
             res = detect_classic_static_encrypted_nonce(blockn, keytype, key);
             if (res == NONCE_STATIC) {
-                PrintAndLogEx(SUCCESS, "Static nonce......... " _YELLOW_("yes"));
+                PrintAndLogEx(SUCCESS, "Static nonce... " _YELLOW_("yes"));
                 fKeyType = 0xFF; // dont detect twice
-            }
-            if (res == NONCE_STATIC_ENC) {
-                PrintAndLogEx(SUCCESS, "Static enc nonce..... " _RED_("yes"));
+            } else if (res == NONCE_SUPERSTATIC) {
+                PrintAndLogEx(SUCCESS, "Static nonce... " _YELLOW_("yes, even when nested"));
+                fKeyType = 0xFF; // dont detect twice
+            } else if (res == NONCE_STATIC_ENC) {
+                PrintAndLogEx(SUCCESS, "Static enc nonce... " _RED_("yes"));
                 fKeyType = 0xFF; // dont detect twice
             }
         }
 
         if (fKeyType != 0xFF) {
             res = detect_classic_static_encrypted_nonce(0, fKeyType, fkey);
-            if (res == NONCE_STATIC)
-                PrintAndLogEx(SUCCESS, "Static nonce......... " _YELLOW_("yes"));
-            if (res == NONCE_STATIC_ENC)
-                PrintAndLogEx(SUCCESS, "Static enc nonce..... " _RED_("yes"));
+            if (res == NONCE_STATIC) {
+                PrintAndLogEx(SUCCESS, "Static nonce... " _YELLOW_("yes"));
+            } else if (res == NONCE_SUPERSTATIC) {
+                PrintAndLogEx(SUCCESS, "Static nonce... " _YELLOW_("yes, even when nested"));
+            } else if (res == NONCE_STATIC_ENC) {
+                PrintAndLogEx(SUCCESS, "Static enc nonce... " _RED_("yes"));
+            }
         }
 
         if (do_nack_test) {
@@ -9477,11 +9848,263 @@ static int CmdHF14AMfInfo(const char *Cmd) {
     return PM3_SUCCESS;
 }
 
+static int CmdHF14AMfISEN(const char *Cmd) {
+    CLIParserContext *ctx;
+    CLIParserInit(&ctx, "hf mf isen",
+                  "Information about Static Encrypted Nonce properties in a MIFARE Classic card",
+                  "hf mf isen\n"
+                  "Default behavior:\n"
+                  "auth(blk)-auth(blk2)-auth(blk2)-...\n"
+                  "Default behavior when wrong key2:\n"
+                  "auth(blk)-auth(blk2) auth(blk)-auth(blk2) ...\n"
+                 );
+
+    void *argtable[] = {
+        arg_param_begin,
+        arg_int0(NULL, "blk", "<dec>", "block number"),
+        arg_lit0("a", NULL, "input key type is key A (def)"),
+        arg_lit0("b", NULL, "input key type is key B"),
+        arg_int0("c", NULL, "<dec>", "input key type is key A + offset"),
+        arg_str0("k", "key", "<hex>", "key, 6 hex bytes"),
+        arg_int0(NULL, "blk2", "<dec>", "nested block number (default=same)"),
+        arg_lit0(NULL, "a2", "nested input key type is key A (default=same)"),
+        arg_lit0(NULL, "b2", "nested input key type is key B (default=same)"),
+        arg_int0(NULL, "c2", "<dec>", "nested input key type is key A + offset"),
+        arg_str0(NULL, "key2", "<hex>", "nested key, 6 hex bytes (default=same)"),
+        arg_int0("n", NULL, "<dec>", "number of nonces (default=2)"),
+        arg_lit0(NULL, "reset", "reset between attempts, even if auth was successful"),
+        arg_lit0(NULL, "hardreset", "hard reset (RF off/on) between attempts, even if auth was successful"),
+        arg_lit0(NULL, "addread", "auth(blk)-read(blk)-auth(blk2)"),
+        arg_lit0(NULL, "addauth", "auth(blk)-auth(blk)-auth(blk2)"),
+        arg_lit0(NULL, "incblk2", "auth(blk)-auth(blk2)-auth(blk2+4)-..."),
+        arg_lit0(NULL, "corruptnrar", "corrupt {nR}{aR}, but with correct parity"),
+        arg_lit0(NULL, "corruptnrarparity", "correct {nR}{aR}, but with corrupted parity"),
+        arg_rem("", ""),
+        arg_rem("FM11RF08S specific options:", "Incompatible with above options, except -k; output in JSON"),
+        arg_lit0(NULL, "collect_fm11rf08s", "collect all nT/{nT}/par_err."),
+        arg_lit0(NULL, "collect_fm11rf08s_with_data", "collect all nT/{nT}/par_err and data blocks."),
+        arg_lit0(NULL, "collect_fm11rf08s_without_backdoor", "collect all nT/{nT}/par_err without backdoor. Requires first auth keytype and block"),
+        arg_str0("f", "file", "<fn>", "Specify a filename for collected data"),
+        arg_param_end
+    };
+    CLIExecWithReturn(ctx, Cmd, argtable, true);
+
+    int blockn = arg_get_int_def(ctx, 1, 0);
+
+    uint8_t keytype = MF_KEY_A;
+    if (arg_get_lit(ctx, 2) && arg_get_lit(ctx, 3)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single input key type");
+        return PM3_EINVARG;
+    } else if (arg_get_lit(ctx, 3)) {
+        keytype = MF_KEY_B;
+    }
+    uint8_t prev_keytype = keytype;
+    keytype = arg_get_int_def(ctx, 4, keytype);
+    if ((arg_get_lit(ctx, 2) || arg_get_lit(ctx, 3)) && (keytype != prev_keytype)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single input key type");
+        return PM3_EINVARG;
+    }
+
+    int keylen = 0;
+    uint8_t key[MIFARE_KEY_SIZE] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    CLIGetHexWithReturn(ctx, 5, key, &keylen);
+
+    int blockn_nested = arg_get_int_def(ctx, 6, blockn);
+
+    uint8_t keytype_nested = keytype;
+    if (arg_get_lit(ctx, 7) && arg_get_lit(ctx, 8)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single nested input key type");
+        return PM3_EINVARG;
+    } else if (arg_get_lit(ctx, 7)) {
+        keytype_nested = MF_KEY_A;
+    } else if (arg_get_lit(ctx, 8)) {
+        keytype_nested = MF_KEY_B;
+    }
+    uint8_t prev_keytype_nested = keytype_nested;
+    keytype_nested = arg_get_int_def(ctx, 9, keytype_nested);
+    if ((arg_get_lit(ctx, 7) || arg_get_lit(ctx, 8)) && (keytype_nested != prev_keytype_nested)) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single nested input key type");
+        return PM3_EINVARG;
+    }
+
+    int keylen_nested = 0;
+    uint8_t key_nested[MIFARE_KEY_SIZE];
+    memcpy(key_nested, key, MIFARE_KEY_SIZE);
+    CLIGetHexWithReturn(ctx, 10, key_nested, &keylen_nested);
+
+    int nr_nested = arg_get_int_def(ctx, 11, 2);
+
+    bool reset = arg_get_lit(ctx, 12);
+    bool hardreset = arg_get_lit(ctx, 13);
+    if (reset && hardreset) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Choose one single type of reset");
+        return PM3_EINVARG;
+    }
+    bool addread = arg_get_lit(ctx, 14);
+    bool addauth = arg_get_lit(ctx, 15);
+    bool incblk2 = arg_get_lit(ctx, 16);
+    bool corruptnrar = arg_get_lit(ctx, 17);
+    bool corruptnrarparity = arg_get_lit(ctx, 18);
+    bool collect_fm11rf08s = arg_get_lit(ctx, 21);
+    bool collect_fm11rf08s_with_data = arg_get_lit(ctx, 22);
+    if (collect_fm11rf08s_with_data) {
+        collect_fm11rf08s = 1;
+    }
+    bool collect_fm11rf08s_without_backdoor = arg_get_lit(ctx, 23);
+    if (collect_fm11rf08s_without_backdoor) {
+        collect_fm11rf08s = 1;
+    }
+    if (collect_fm11rf08s_with_data && collect_fm11rf08s_without_backdoor) {
+        CLIParserFree(ctx);
+        PrintAndLogEx(WARNING, "Don't mix with_data and without_backdoor options");
+        return PM3_EINVARG;
+    }
+    int fnlen = 0;
+    char filename[FILE_PATH_SIZE] = {0};
+    CLIParamStrToBuf(arg_get_str(ctx, 24), (uint8_t *)filename, FILE_PATH_SIZE, &fnlen);
+
+    CLIParserFree(ctx);
+
+    uint8_t dbg_curr = DBG_NONE;
+    if (getDeviceDebugLevel(&dbg_curr) != PM3_SUCCESS) {
+        return PM3_EFAILED;
+    }
+
+    if (keylen != 0 && keylen != MIFARE_KEY_SIZE) {
+        PrintAndLogEx(ERR, "Key length must be %u bytes", MIFARE_KEY_SIZE);
+        return PM3_EINVARG;
+    }
+
+    if (keylen_nested != 0 && keylen_nested != MIFARE_KEY_SIZE) {
+        PrintAndLogEx(ERR, "Key length must be %u bytes", MIFARE_KEY_SIZE);
+        return PM3_EINVARG;
+    }
+
+    clearCommandBuffer();
+    SendCommandMIX(CMD_HF_ISO14443A_READER, ISO14A_CONNECT, 0, 0, NULL, 0);
+    PacketResponseNG resp;
+    if (WaitForResponseTimeout(CMD_ACK, &resp, 2500) == false) {
+        PrintAndLogEx(DEBUG, "iso14443a card select timeout");
+        return 0;
+    }
+
+    iso14a_card_select_t card;
+    memcpy(&card, (iso14a_card_select_t *)resp.data.asBytes, sizeof(iso14a_card_select_t));
+
+    /*
+        0: couldn't read
+        1: OK, with ATS
+        2: OK, no ATS
+        3: proprietary Anticollision
+    */
+    uint64_t select_status = resp.oldarg[0];
+
+    if (select_status == 0) {
+        PrintAndLogEx(DEBUG, "iso14443a card select failed");
+        return select_status;
+    }
+
+    if (select_status == 3) {
+        PrintAndLogEx(INFO, "Card doesn't support standard iso14443-3 anticollision");
+    }
+
+    if (collect_fm11rf08s) {
+        uint64_t t1 = msclock();
+        uint32_t flags = collect_fm11rf08s_with_data | (collect_fm11rf08s_without_backdoor << 1);
+        SendCommandMIX(CMD_HF_MIFARE_ACQ_STATIC_ENCRYPTED_NONCES, flags, blockn, keytype, key, sizeof(key));
+        if (WaitForResponseTimeout(CMD_ACK, &resp, 1000)) {
+            if (resp.oldarg[0] != PM3_SUCCESS) {
+                return NONCE_FAIL;
+            }
+        }
+        uint8_t num_sectors = MIFARE_1K_MAXSECTOR + 1;
+        iso14a_fm11rf08s_nonces_with_data_t nonces_dump = {0};
+        for (uint8_t sec = 0; sec < num_sectors; sec++) {
+            // reconstruct full nt
+            uint32_t nt;
+            nt = bytes_to_num(resp.data.asBytes + ((sec * 2) * 8), 2);
+            nt = nt << 16 | prng_successor(nt, 16);
+            num_to_bytes(nt, 4, nonces_dump.nt[sec][0]);
+            nt = bytes_to_num(resp.data.asBytes + (((sec * 2) + 1) * 8), 2);
+            nt = nt << 16 | prng_successor(nt, 16);
+            num_to_bytes(nt, 4, nonces_dump.nt[sec][1]);
+        }
+        for (uint8_t sec = 0; sec < num_sectors; sec++) {
+            memcpy(nonces_dump.nt_enc[sec][0], resp.data.asBytes + ((sec * 2) * 8) + 4, 4);
+            memcpy(nonces_dump.nt_enc[sec][1], resp.data.asBytes + (((sec * 2) + 1) * 8) + 4, 4);
+        }
+        for (uint8_t sec = 0; sec < num_sectors; sec++) {
+            nonces_dump.par_err[sec][0] = resp.data.asBytes[((sec * 2) * 8) + 2];
+            nonces_dump.par_err[sec][1] = resp.data.asBytes[(((sec * 2) + 1) * 8) + 2];
+        }
+        if (collect_fm11rf08s_with_data) {
+            int bytes = MIFARE_1K_MAXBLOCK * MFBLOCK_SIZE;
+
+            uint8_t *dump = calloc(bytes, sizeof(uint8_t));
+            if (dump == NULL) {
+                PrintAndLogEx(WARNING, "Fail, cannot allocate memory");
+                return PM3_EFAILED;
+            }
+            if (!GetFromDevice(BIG_BUF_EML, dump, bytes, 0, NULL, 0, NULL, 2500, false)) {
+                PrintAndLogEx(WARNING, "Fail, transfer from device time-out");
+                free(dump);
+                return PM3_ETIMEOUT;
+            }
+            for (uint8_t blk = 0; blk < MIFARE_1K_MAXBLOCK; blk++) {
+                memcpy(nonces_dump.blocks[blk], dump + blk * MFBLOCK_SIZE, MFBLOCK_SIZE);
+            }
+            free(dump);
+        }
+        t1 = msclock() - t1;
+        PrintAndLogEx(SUCCESS, "time: " _YELLOW_("%" PRIu64) " ms", t1);
+
+        if (fnlen == 0) {
+            snprintf(filename, sizeof(filename), "hf-mf-%s-nonces%s", sprint_hex_inrow(card.uid, card.uidlen), collect_fm11rf08s_with_data ? "_with_data" : "");
+        }
+        if (pm3_save_fm11rf08s_nonces(filename, &nonces_dump, collect_fm11rf08s_with_data) != PM3_SUCCESS) {
+            return PM3_EFAILED;
+        }
+        return PM3_SUCCESS;
+    }
+
+    PrintAndLogEx(NORMAL, "");
+    PrintAndLogEx(INFO, "--- " _CYAN_("ISO14443-a Information") " ---------------------");
+    PrintAndLogEx(SUCCESS, " UID: " _GREEN_("%s"), sprint_hex(card.uid, card.uidlen));
+    PrintAndLogEx(SUCCESS, "ATQA: " _GREEN_("%02X %02X"), card.atqa[1], card.atqa[0]);
+    PrintAndLogEx(SUCCESS, " SAK: " _GREEN_("%02X [%" PRIu64 "]"), card.sak, resp.oldarg[0]);
+
+//    if (setDeviceDebugLevel(DBG_DEBUG, false) != PM3_SUCCESS) {
+    if (setDeviceDebugLevel(DBG_EXTENDED, false) != PM3_SUCCESS) {
+        return PM3_EFAILED;
+    }
+
+    int res = detect_classic_static_encrypted_nonce_ex(blockn, keytype, key, blockn_nested, keytype_nested, key_nested, nr_nested, reset, hardreset, addread, addauth, incblk2, corruptnrar, corruptnrarparity, true);
+    if (res == NONCE_STATIC) {
+        PrintAndLogEx(SUCCESS, "Static nonce......... " _YELLOW_("yes"));
+    } else if (res == NONCE_SUPERSTATIC) {
+        PrintAndLogEx(SUCCESS, "Static nonce......... " _YELLOW_("yes, even when nested"));
+    } else if (res == NONCE_STATIC_ENC) {
+        PrintAndLogEx(SUCCESS, "Static enc nonce..... " _RED_("yes"));
+    }
+    if (setDeviceDebugLevel(dbg_curr, false) != PM3_SUCCESS) {
+        return PM3_EFAILED;
+    }
+
+    PrintAndLogEx(NORMAL, "");
+    return PM3_SUCCESS;
+}
+
 static command_t CommandTable[] = {
     {"help",        CmdHelp,                AlwaysAvailable, "This help"},
     {"list",        CmdHF14AMfList,         AlwaysAvailable, "List MIFARE history"},
     {"-----------", CmdHelp,                IfPm3Iso14443a,  "----------------------- " _CYAN_("recovery") " -----------------------"},
     {"info",        CmdHF14AMfInfo,         IfPm3Iso14443a,  "mfc card Info"},
+    {"isen",        CmdHF14AMfISEN,         IfPm3Iso14443a,  "mfc card Info Static Encrypted Nonces"},
     {"darkside",    CmdHF14AMfDarkside,     IfPm3Iso14443a,  "Darkside attack"},
     {"nested",      CmdHF14AMfNested,       IfPm3Iso14443a,  "Nested attack"},
     {"hardnested",  CmdHF14AMfNestedHard,   AlwaysAvailable, "Nested attack for hardened MIFARE Classic cards"},

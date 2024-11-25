@@ -37,6 +37,7 @@ void MifareNested(uint8_t blockNo, uint8_t keyType, uint8_t targetBlockNo, uint8
 void MifareStaticNested(uint8_t blockNo, uint8_t keyType, uint8_t targetBlockNo, uint8_t targetKeyType, uint8_t *key);
 
 void MifareAcquireEncryptedNonces(uint32_t arg0, uint32_t arg1, uint32_t flags, uint8_t *datain);
+int MifareAcquireStaticEncryptedNonces(uint32_t flags, const uint8_t *key, bool reply, uint8_t first_block_no, uint8_t first_key_type);
 void MifareAcquireNonces(uint32_t arg0, uint32_t flags);
 void MifareChkKeys(uint8_t *datain, uint8_t reserved_mem);
 void MifareChkKeys_fast(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint8_t *datain);
@@ -44,15 +45,15 @@ void MifareChkKeys_file(uint8_t *fn);
 
 void MifareEMemClr(void);
 void MifareEMemGet(uint8_t blockno, uint8_t blockcnt);
-int MifareECardLoad(uint8_t sectorcnt, uint8_t keytype);
-int MifareECardLoadExt(uint8_t sectorcnt, uint8_t keytype);
+int MifareECardLoad(uint8_t sectorcnt, uint8_t keytype, uint8_t *key);
+int MifareECardLoadExt(uint8_t sectorcnt, uint8_t keytype, uint8_t *key);
 
 // MFC GEN1a /1b
 void MifareCSetBlock(uint32_t arg0, uint32_t arg1, uint8_t *datain);  // Work with "magic Chinese" card
 void MifareCGetBlock(uint32_t arg0, uint32_t arg1, uint8_t *datain);
 void MifareCIdent(bool is_mfc, uint8_t keytype, uint8_t *key);  // is "magic chinese" card?
 void MifareHasStaticNonce(void);  // Has the tag a static nonce?
-void MifareHasStaticEncryptedNonce(uint8_t block_no, uint8_t key_type, uint8_t *key); // Has the tag a static encrypted nonce?
+void MifareHasStaticEncryptedNonce(uint8_t block_no, uint8_t key_type, uint8_t *key, uint8_t block_no_nested, uint8_t key_type_nested, uint8_t *key_nested, uint8_t nr_nested, bool reset, bool hardreset, bool addread, bool addauth, bool incblk2, bool corruptnrar, bool corruptnrarparity); // Has the tag a static encrypted nonce?
 
 // MFC GEN3
 int DoGen3Cmd(uint8_t *cmd, uint8_t cmd_len);

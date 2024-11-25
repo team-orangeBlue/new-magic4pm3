@@ -1,19 +1,19 @@
 MYSRCPATHS = ../../common ../../common/mbedtls
 MYSRCS = util_posix.c randoms.c
 MYINCLUDES =  -I../../include -I../../common -I../../common/mbedtls
-MYCFLAGS = -Ofast
+MYCFLAGS = -O3 -ffast-math
 MYDEFS =
 MYLDLIBS = -lcrypto
 
-# A better way would be to just try compiling with march and seeing if we succeed
-cpu_arch = $(shell uname -m)
-ifneq ($(findstring arm64, $(cpu_arch)), )
-    MYCFLAGS += -mcpu=native
-# iOS 'fun'
-else ifneq ($(findstring iP, $(cpu_arch)), )
-    MYCFLAGS += -mcpu=native
-else
+SUPPORT_MARCH := $(shell $(CC) -xc /dev/null -c -o /dev/null -march=native > /dev/null 2>/dev/null && echo y)
+SUPPORT_MCPU := $(shell $(CC) -xc /dev/null -c -o /dev/null -mcpu=native > /dev/null 2>/dev/null && echo y)
+
+ifeq ($(DONT_BUILD_NATIVE),y)
+    # do nothing
+else ifeq ($(SUPPORT_MARCH),y)
     MYCFLAGS += -march=native
+else ifeq ($(SUPPORT_MCPU),y)
+    MYCFLAGS += -mcpu=native
 endif
 
 ifneq ($(SKIPPTHREAD),1)
@@ -42,6 +42,9 @@ ifeq ($(USE_MACPORTS),1)
     MYCFLAGS += -I$(MACPORTS_PREFIX)/include/openssl-3 -I$(MACPORTS_PREFIX)/include/openssl-1.1
     MYLDFLAGS += -L$(MACPORTS_PREFIX)/lib/openssl-3 -L$(MACPORTS_PREFIX)/lib/openssl-1.1
 endif
+
+showinfo:
+	@echo "C flags: $(MYCFLAGS)"
 
 brute_key : $(OBJDIR)/brute_key.o $(MYOBJS)
 

@@ -342,13 +342,15 @@ int main(int argc, char **argv) {
             switch (e) {
                 case 0: // UID
                     if (!strncmp(argv[optind], "0x", 2) || !strncmp(argv[optind], "0X", 2)) {
-                        if (strlen(argv[optind]) != 2 + 8) { 
-                            printf("Error: invalid UID length\n"); usage(argv[0]); 
+                        if (strlen(argv[optind]) != 2 + 8) {
+                            printf("Error: invalid UID length\n");
+                            usage(argv[0]);
                         }
                         uid = (uint32_t) rev32(hexreversetoulong(argv[optind] + 2));
                     } else {
                         if (strlen(argv[optind]) != 8) {
-                            printf("Error: invalid UID length\n"); usage(argv[0]); 
+                            printf("Error: invalid UID length\n");
+                            usage(argv[0]);
                         }
                         uid = (uint32_t) rev32(hexreversetoulong(argv[optind]));
                     }
@@ -357,12 +359,14 @@ int main(int argc, char **argv) {
                 case 1: // nR1
                     if (!strncmp(argv[optind], "0x", 2) || !strncmp(argv[optind], "0X", 2)) {
                         if (strlen(argv[optind]) != 2 + 8) {
-                            printf("Error: invalid nR1 length\n"); usage(argv[0]); 
+                            printf("Error: invalid nR1 length\n");
+                            usage(argv[0]);
                         }
                         nR1 = (uint32_t) rev32(hexreversetoulong(argv[optind] + 2));
                     } else {
                         if (strlen(argv[optind]) != 8) {
-                            printf("Error: invalid nR1 length\n"); usage(argv[0]); 
+                            printf("Error: invalid nR1 length\n");
+                            usage(argv[0]);
                         }
                         nR1 = (uint32_t) rev32(hexreversetoulong(argv[optind]));
                     }
@@ -370,7 +374,8 @@ int main(int argc, char **argv) {
 
                 case 2: // aR1
                     if (strlen(argv[optind]) != 8) {
-                        printf("Error: invalid aR1 length\n"); usage(argv[0]);
+                        printf("Error: invalid aR1 length\n");
+                        usage(argv[0]);
                     }
                     aR1 = (uint32_t) strtoul(argv[optind], NULL, 16);
                     break;
@@ -378,12 +383,14 @@ int main(int argc, char **argv) {
                 case 3: // nR2
                     if (!strncmp(argv[optind], "0x", 2) || !strncmp(argv[optind], "0X", 2)) {
                         if (strlen(argv[optind]) != 2 + 8) {
-                            printf("Error: invalid nR2 length\n"); usage(argv[0]); 
+                            printf("Error: invalid nR2 length\n");
+                            usage(argv[0]);
                         }
                         nR2 = (uint32_t) rev32(hexreversetoulong(argv[optind] + 2));
                     } else {
                         if (strlen(argv[optind]) != 8) {
-                            printf("Error: invalid nR2 length\n"); usage(argv[0]); 
+                            printf("Error: invalid nR2 length\n");
+                            usage(argv[0]);
                         }
                         nR2 = (uint32_t) rev32(hexreversetoulong(argv[optind]));
                     }
@@ -391,7 +398,8 @@ int main(int argc, char **argv) {
 
                 case 4: // aR2
                     if (strlen(argv[optind]) != 8) {
-                        printf("Error: invalid aR2 length\n"); usage(argv[0]); 
+                        printf("Error: invalid aR2 length\n");
+                        usage(argv[0]);
                     }
                     aR2 = (uint32_t) strtoul(argv[optind], NULL, 16);
                     break;
@@ -697,21 +705,28 @@ int main(int argc, char **argv) {
     // show buidlog in case of error
     // todo: only for device models
     unsigned int build_errors = 0;
-    unsigned int build_logs = 0;
+    // unsigned int build_logs = 0;
 
     cl_command_queue_properties queue_properties = 0;
 
-    if (opencl_profiling) queue_properties = CL_QUEUE_PROFILING_ENABLE;
+    if (opencl_profiling) {
+        queue_properties = CL_QUEUE_PROFILING_ENABLE;
+    }
 
     // setup, phase 1
 
     z = 0; // dolphin
 
     for (w = 0; w < ocl_platform_cnt; w++) {
-        if (!cd_ctx[w].selected) continue;
+        if (!cd_ctx[w].selected) {
+            continue;
+        }
 
         for (q = 0; q < cd_ctx[w].device_cnt; q++) {
-            if (!cd_ctx[w].device[q].selected) continue;
+
+            if (!cd_ctx[w].device[q].selected) {
+                continue;
+            }
 
             ctx.device_ids[z] = cd_ctx[w].device[q].device_id;
 
@@ -822,9 +837,13 @@ int main(int argc, char **argv) {
                     continue;
                 }
 
-                if (len == 0) continue;
+                if (len == 0) {
+                    continue;
+                }
 
-                if (len > 0xdeadbe) len = 0xdeadbe; // limit build_log size
+                if (len > 0xdeadbe) {
+                    len = 0xdeadbe; // limit build_log size
+                }
 
                 char *buffer = (char *) calloc(len, sizeof(char));
                 if (!buffer) {
@@ -848,7 +867,7 @@ int main(int argc, char **argv) {
 
                 free(buffer);
 
-                build_logs++;
+                // build_logs++;
 #if DEBUGME == 0
                 continue; // todo: evaluate this, one or more can be broken, so continue
 #endif
@@ -900,27 +919,40 @@ int main(int argc, char **argv) {
     z = 0;
 
     for (w = 0; w < ocl_platform_cnt; w++) {
-        if (!cd_ctx[w].selected) continue;
+
+        if (!cd_ctx[w].selected) {
+            continue;
+        }
 
         for (q = 0; q < cd_ctx[w].device_cnt; q++) {
-            if (!cd_ctx[w].device[q].selected) continue;
+
+            if (!cd_ctx[w].device[q].selected) {
+                continue;
+            }
 
             ctx.global_ws[z] = (1 << profiles[profile][1]);
 
             // the following happens with cpu devices or Apple GPU
             if (ctx.local_ws[z] > 256) {
-                if (cd_ctx[w].is_apple) ctx.local_ws[z] = 256;
-                else if (!cd_ctx[w].device[q].is_gpu) ctx.local_ws[z] = 256;
+
+                if (cd_ctx[w].is_apple) {
+                    ctx.local_ws[z] = 256;
+                } else if (!cd_ctx[w].device[q].is_gpu) {
+                    ctx.local_ws[z] = 256;
+                }
             }
 
             // dow't allow gws < lws
-            if (ctx.global_ws[z] < ctx.local_ws[z]) ctx.local_ws[z] = ctx.global_ws[z];
+            if (ctx.global_ws[z] < ctx.local_ws[z]) {
+                ctx.local_ws[z] = ctx.global_ws[z];
+            }
 
             if (opencl_profiling) {
                 printf("[%zu] global_ws %zu, local_ws %zu\n", g, ctx.global_ws[z], ctx.local_ws[z]);
             }
 
             if (!ctx.force_hitag2_opencl) {
+
                 if (!(matches[z] = (uint64_t *) calloc((uint32_t)(ctx.global_ws[z] * WGS_MATCHES_FACTOR), sizeof(uint64_t)))) {
                     printf("[%zu] Error: calloc (matches) failed (%d): %s\n", g, errno, strerror(errno));
                     MEMORY_FREE_OPENCL(ctx, z)
@@ -929,7 +961,9 @@ int main(int argc, char **argv) {
                     MEMORY_FREE_ALL
                     exit(2);
                 }
+
             } else { // one
+
                 if (!(matches[z] = (uint64_t *) calloc(1, sizeof(uint64_t)))) {
                     printf("[%zu] Error: calloc (matches) failed (%d): %s\n", z, errno, strerror(errno));
                     MEMORY_FREE_OPENCL(ctx, z)
@@ -1085,7 +1119,9 @@ int main(int argc, char **argv) {
     printf("[queue] Fill queue with pre-calculated offset using profile (%d): ", profile);
 #endif
 
-    for (size_t step = 0; step < max_step; step++) wu_queue_push(&ctx.queue_ctx, step, step << chunk, max_step);
+    for (size_t step = 0; step < max_step; step++) {
+        wu_queue_push(&ctx.queue_ctx, step, step << chunk, max_step);
+    }
 
 #if DEBUGME > 0
     printf("done\n");
@@ -1182,10 +1218,10 @@ int main(int argc, char **argv) {
         printf(")\n\n");
     } else {
         printf(", Profile %u, Async Threads %s, HiTag2 key verify on device %s)\n\n"
-            , profile
-            , (ctx.thread_sched_type == THREAD_TYPE_ASYNC) ? "yes" : "no"
-            , (force_hitag2_opencl) ? "yes" : "no"
-        );
+               , profile
+               , (ctx.thread_sched_type == THREAD_TYPE_ASYNC) ? "yes" : "no"
+               , (force_hitag2_opencl) ? "yes" : "no"
+              );
     }
 
     if (gettimeofday(&cpu_t_start, NULL) == -1) {
@@ -1216,9 +1252,9 @@ int main(int argc, char **argv) {
             }
 
             printf("\nKey found @ slice %zu/%zu [ \x1b[32m"
-                , t_arg[y].slice
-                , t_arg[y].max_slices
-            );
+                   , t_arg[y].slice
+                   , t_arg[y].max_slices
+                  );
 
             for (int i = 0; i < 6; i++) {
                 printf("%02X", (uint8_t)(t_arg[y].key & 0xff));

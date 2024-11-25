@@ -44,9 +44,14 @@ Makefile.platform.*
 .Makefile.options.cache
 
 # cmake
+CMakeFiles/
+deps/
+client/CMakeFiles/
+client/deps/
 client/build/
 client/android/build/
-client/deps/bzip2/
+CMakeCache.txt
+*.cmake
 
 # Coverity
 cov-int/
@@ -69,16 +74,10 @@ flasher
 lua
 luac
 tools/fpga_compress/fpga_compress
-tools/mfkey/mfkey32
-tools/mfkey/mfkey64
-tools/mfkey/staticnested
-tools/nonce2key/nonce2key
 tools/cryptorf/cm
 tools/cryptorf/sm
 tools/cryptorf/sma
 tools/cryptorf/sma_multi
-tools/mf_nonce_brute/mf_nonce_brute
-tools/mf_nonce_brute/mf_trace_brute
 tools/jtag_openocd/openocd_configuration
 tools/mfd_aes_brute/mfd_aes_brute
 tools/mfd_aes_brute/mfd_multi_brute
@@ -117,3 +116,10 @@ fpga_version_info.c
 
 # docs
 !doc/*.json
+
+# local codeql
+_codeql*
+/codeql
+
+# Pyton venvs
+venv/

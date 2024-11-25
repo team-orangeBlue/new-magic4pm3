@@ -172,7 +172,7 @@ static int CmdMotorolaReader(const char *Cmd) {
         .samples_to_skip = 4500,
         .verbose = false
     };
-    lf_config(&sc);
+    lf_setconfig(&sc);
 
     int res;
     do {
@@ -184,7 +184,7 @@ static int CmdMotorolaReader(const char *Cmd) {
     // reset back to 125 kHz
     sc.divisor = LF_DIVISOR_125;
     sc.samples_to_skip = 0;
-    lf_config(&sc);
+    lf_setconfig(&sc);
 
     return res;
 }
@@ -253,7 +253,7 @@ static int CmdMotorolaClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf motorola reader`") " to verify");
     return res;
 }

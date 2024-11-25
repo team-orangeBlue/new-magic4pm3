@@ -189,8 +189,8 @@ static int CmdPrescoClone(const char *Cmd) {
     uint8_t hex[4] = {0, 0, 0, 0};
     CLIGetHexWithReturn(ctx, 1, hex, &hex_len);
 
-    uint8_t idstr[11];
-    int slen = 9;
+    uint8_t idstr[10];
+    int slen = sizeof(idstr) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     memset(idstr, 0x00, sizeof(idstr));
     CLIGetStrWithReturn(ctx, 2, idstr, &slen);
 
@@ -264,7 +264,7 @@ static int CmdPrescoClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf presco reader`") " to verify");
     return res;
 }
@@ -292,8 +292,8 @@ static int CmdPrescoSim(const char *Cmd) {
     uint8_t hex[4] = {0, 0, 0, 0};
     CLIGetHexWithReturn(ctx, 1, hex, &hex_len);
 
-    uint8_t idstr[11];
-    int slen = 9;
+    uint8_t idstr[10] = {0};
+    int slen = sizeof(idstr) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     memset(idstr, 0x00, sizeof(idstr));
     CLIGetStrWithReturn(ctx, 2, idstr, &slen);
     CLIParserFree(ctx);
@@ -357,7 +357,7 @@ static command_t CommandTable[] = {
     {"help",    CmdHelp,        AlwaysAvailable, "This help"},
     {"demod",   CmdPrescoDemod, AlwaysAvailable, "demodulate Presco tag from the GraphBuffer"},
     {"reader",  CmdPrescoReader, IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",   CmdPrescoClone,  IfPm3Lf,         "clone presco tag to T55x7 or Q5/T5555"},
+    {"clone",   CmdPrescoClone,  IfPm3Lf,         "clone presco tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",     CmdPrescoSim,    IfPm3Lf,         "simulate presco tag"},
     {NULL, NULL, NULL, NULL}
 };

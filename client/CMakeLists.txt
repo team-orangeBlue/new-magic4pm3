@@ -44,7 +44,11 @@ endif()
 
 find_package(PkgConfig)
 
+# Allow specifying a Python version via cmake option
+set(PYTHON3_PKGCONFIG "python3" CACHE STRING "Python3 package config version suffix")
+
 if (NOT SKIPQT EQUAL 1)
+
     if(APPLE AND EXISTS /usr/local/opt/qt5)
         # Homebrew installs Qt5 (up to at least 5.11.0) in
         # /usr/local/opt/qt5. Ensure that it can be found by CMake
@@ -55,16 +59,17 @@ if (NOT SKIPQT EQUAL 1)
         # e.g. find_package(Qt5Core ${QT_FIND_PACKAGE_OPTIONS})
         list(APPEND QT_FIND_PACKAGE_OPTIONS PATHS /usr/local/opt/qt5)
     endif(APPLE AND EXISTS /usr/local/opt/qt5)
-    if(APPLE AND EXISTS /opt/homebrew/opt/qt5)
+
+    if(APPLE AND EXISTS /opt/homebrew/opt/qt@5)
         # Homebrew on Apple Silicon installs Qt5 in
-        # /opt/homebrew/opt/qt5. Ensure that it can be found by CMake
+        # /opt/homebrew/opt/qt@5. Ensure that it can be found by CMake
         # since it is not in the default /usr/local prefix.
         # Add it to PATHS so that it doesn't override the
         # CMAKE_PREFIX_PATH environment variable.
         # QT_FIND_PACKAGE_OPTIONS should be passed to find_package,
         # e.g. find_package(Qt5Core ${QT_FIND_PACKAGE_OPTIONS})
-        list(APPEND QT_FIND_PACKAGE_OPTIONS PATHS /opt/homebrew/opt/qt5)
-    endif(APPLE AND EXISTS /opt/homebrew/opt/qt5)
+        list(APPEND QT_FIND_PACKAGE_OPTIONS PATHS /opt/homebrew/opt/qt@5)
+    endif(APPLE AND EXISTS /opt/homebrew/opt/qt@5)
     set(QT_PACKAGELIST
         Qt5Core
         Qt5Widgets
@@ -85,8 +90,8 @@ if (NOT SKIPBT EQUAL 1)
 endif (NOT SKIPBT EQUAL 1)
 
 if (NOT SKIPPYTHON EQUAL 1)
-    pkg_search_module(PYTHON3 QUIET python3)
-    pkg_search_module(PYTHON3EMBED QUIET python3-embed)
+    pkg_search_module(PYTHON3 QUIET ${PYTHON3_PKGCONFIG})
+    pkg_search_module(PYTHON3EMBED QUIET ${PYTHON3_PKGCONFIG}-embed)
 endif (NOT SKIPPYTHON EQUAL 1)
 
 # If cross-compiled, we need to init source and build.
@@ -123,7 +128,7 @@ if (NOT SKIPREADLINE EQUAL 1)
         ExternalProject_Add_StepTargets(ncurses configure build install)
 
         ExternalProject_Add(readline
-            URL                   ftp://ftp.gnu.org/gnu/readline/readline-8.2.tar.gz
+            URL                   https://ftp.gnu.org/gnu/readline/readline-8.2.tar.gz
             PREFIX                deps/readline
             DOWNLOAD_DIR          ${CMAKE_CURRENT_SOURCE_DIR}/deps/readline
             CONFIGURE_COMMAND     ./configure CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} LD=${CMAKE_C_COMPILER} AR=${CMAKE_AR} RANLIB=${CMAKE_RANLIB} ${CFLAGS_EXTERNAL_LIB} --host=arm --enable-static
@@ -261,6 +266,7 @@ set (TARGET_SOURCES
         ${PM3_ROOT}/common/cardhelper.c
         ${PM3_ROOT}/common/generator.c
         ${PM3_ROOT}/common/bruteforce.c
+        ${PM3_ROOT}/common/hitag2/hitag2_crypto.c
         ${PM3_ROOT}/client/src/crypto/asn1dump.c
         ${PM3_ROOT}/client/src/crypto/asn1utils.c
         ${PM3_ROOT}/client/src/crypto/libpcrypto.c
@@ -372,6 +378,7 @@ set (TARGET_SOURCES
         ${PM3_ROOT}/client/src/cmdlfguard.c
         ${PM3_ROOT}/client/src/cmdlfhid.c
         ${PM3_ROOT}/client/src/cmdlfhitag.c
+        ${PM3_ROOT}/client/src/cmdlfhitaghts.c
         ${PM3_ROOT}/client/src/cmdlfidteck.c
         ${PM3_ROOT}/client/src/cmdlfindala.c
         ${PM3_ROOT}/client/src/cmdlfio.c
@@ -407,6 +414,7 @@ set (TARGET_SOURCES
         ${PM3_ROOT}/client/src/graph.c
         ${PM3_ROOT}/client/src/iso4217.c
         ${PM3_ROOT}/client/src/jansson_path.c
+        ${PM3_ROOT}/client/src/lua_bitlib.c
         ${PM3_ROOT}/client/src/preferences.c
         ${PM3_ROOT}/client/src/pm3.c
         ${PM3_ROOT}/client/src/pm3_binlib.c
@@ -454,7 +462,6 @@ if (APPLE)
       message(STATUS "AppKit.framework found! ${APPKIT_LIBRARY}")
       set(ADDITIONAL_LNK "-framework Foundation" "-framework AppKit")
     endif()
-
 endif (APPLE)
 
 if ((NOT SKIPQT EQUAL 1) AND (Qt5_FOUND))
@@ -607,11 +614,11 @@ if (SKIPPYTHON EQUAL 1)
     message(STATUS "Python3 library:   skipped")
 else (SKIPPYTHON EQUAL 1)
     if (PYTHON3EMBED_FOUND)
-        message(STATUS "Python3 library:   Python3 embed found, enabled")
+        message(STATUS "Python3 library:   ${PYTHON3_PKGCONFIG}-embed found, enabled")
     elseif (PYTHON3_FOUND)
-        message(STATUS "Python3 library:   Python3 found, enabled")
+        message(STATUS "Python3 library:   ${PYTHON3_PKGCONFIG} found, enabled")
     else (PYTHON3EMBED_FOUND)
-        message(STATUS "Python3 library:   Python3 not found, disabled")
+        message(STATUS "Python3 library:   ${PYTHON3_PKGCONFIG} not found, disabled")
     endif (PYTHON3EMBED_FOUND)
 endif(SKIPPYTHON EQUAL 1)
 
@@ -732,6 +739,9 @@ target_include_directories(proxmark3 PRIVATE
 if (NOT APPLE)
     # required for Raspberry Pi, but breaks with clang (OSX). Need to be at the end of the linker line.
     set(ADDITIONAL_LNK ${ADDITIONAL_LNK} -Wl,--as-needed -latomic -Wl,--no-as-needed)
+else (NOT APPLE)
+    #set_property(TARGET proxmark3 PROPERTY LINK_FLAGS "-Wl,-undefined dynamic_lookup")
+    set(ADDITIONAL_LNK ${ADDITIONAL_LNK} -Wl,-undefined,dynamic_lookup)
 endif (NOT APPLE)
 
 if (NOT JANSSON_FOUND)

@@ -42,12 +42,12 @@ static bool is_last_record(uint16_t tracepos, uint16_t traceLen) {
 }
 
 static bool next_record_is_response(uint16_t tracepos, uint8_t *trace) {
-    tracelog_hdr_t *hdr = (tracelog_hdr_t *)(trace + tracepos);
+    const tracelog_hdr_t *hdr = (tracelog_hdr_t *)(trace + tracepos);
     return (hdr->isResponse);
 }
 
 static bool merge_topaz_reader_frames(uint32_t timestamp, uint32_t *duration, uint16_t *tracepos, uint16_t traceLen,
-                                      uint8_t *trace, uint8_t *frame, uint8_t *topaz_reader_command, uint16_t *data_len) {
+                                      uint8_t *trace, const uint8_t *frame, uint8_t *topaz_reader_command, uint16_t *data_len) {
 
 #define MAX_TOPAZ_READER_CMD_LEN 16
 
@@ -59,7 +59,7 @@ static bool merge_topaz_reader_frames(uint32_t timestamp, uint32_t *duration, ui
 
     while (!is_last_record(*tracepos, traceLen) && !next_record_is_response(*tracepos, trace)) {
 
-        tracelog_hdr_t *hdr = (tracelog_hdr_t *)(trace + *tracepos);
+        const tracelog_hdr_t *hdr = (tracelog_hdr_t *)(trace + *tracepos);
 
         *tracepos += TRACELOG_HDR_LEN + hdr->data_len;
 
@@ -93,7 +93,7 @@ static uint8_t calc_pos(const uint8_t *d) {
 
 // Copy an existing buffer into client trace buffer
 // I think this is cleaner than further globalizing gs_trace, and may lend itself to more modularity later?
-bool ImportTraceBuffer(uint8_t *trace_src, uint16_t trace_len) {
+bool ImportTraceBuffer(const uint8_t *trace_src, uint16_t trace_len) {
     if (trace_len == 0 || trace_src == NULL) return (false);
     if (gs_trace) {
         free(gs_trace);
@@ -218,7 +218,7 @@ static uint16_t extractChallenges(uint16_t tracepos, uint16_t traceLen, uint8_t 
         switch (c) {
             case ICLASS_CMD_SELECT: {
 
-                tracelog_hdr_t *next_hdr = (tracelog_hdr_t *)(trace + tracepos);
+                const tracelog_hdr_t *next_hdr = (tracelog_hdr_t *)(trace + tracepos);
                 tracepos += SKIP_TO_NEXT(next_hdr);
                 if (next_hdr->data_len != 10) {
                     break;
@@ -231,7 +231,7 @@ static uint16_t extractChallenges(uint16_t tracepos, uint16_t traceLen, uint8_t 
 
                 // get epurse
                 if (frame[1] == 2 && data_len == 2) {
-                    tracelog_hdr_t *next_hdr = (tracelog_hdr_t *)(trace + tracepos);
+                    const tracelog_hdr_t *next_hdr = (tracelog_hdr_t *)(trace + tracepos);
                     tracepos += SKIP_TO_NEXT(next_hdr);
                     if (next_hdr->data_len < 8) {
                         break;
@@ -501,7 +501,7 @@ static uint16_t printTraceLine(uint16_t tracepos, uint16_t traceLen, uint8_t *tr
 
     uint32_t end_of_transmission_timestamp = 0;
     uint8_t topaz_reader_command[9];
-    char explanation[40] = {0};
+    char explanation[60] = {0};
     tracelog_hdr_t *first_hdr = (tracelog_hdr_t *)(trace);
     tracelog_hdr_t *hdr = (tracelog_hdr_t *)(trace + tracepos);
 
@@ -624,7 +624,7 @@ static uint16_t printTraceLine(uint16_t tracepos, uint16_t traceLen, uint8_t *tr
                 && (hdr->isResponse || protocol == ISO_14443A || protocol == PROTO_MIFARE || protocol == PROTO_MFPLUS || protocol == SEOS)
                 && (oddparity8(frame[j]) != ((parityBits >> (7 - (j & 0x0007))) & 0x01))) {
 
-            snprintf(line[j / 18] + ((j % 18) * 4), 120, "%02x! ", frame[j]);
+            snprintf(line[j / 18] + ((j % 18) * 4), 120, "%02X! ", frame[j]);
 
         } else if (protocol == ICLASS  && hdr->isResponse == false) {
 
@@ -634,49 +634,46 @@ static uint16_t printTraceLine(uint16_t tracepos, uint16_t traceLen, uint8_t *tr
             }
 
             if (parity == ((frame[0] >> 7) & 1)) {
-                snprintf(line[j / 18] + ((j % 18) * 4), 120, "%02x  ", frame[j]);
+                snprintf(line[j / 18] + ((j % 18) * 4), 120, "%02X  ", frame[j]);
             } else {
-                snprintf(line[j / 18] + ((j % 18) * 4), 120, "%02x! ", frame[j]);
+                snprintf(line[j / 18] + ((j % 18) * 4), 120, "%02X! ", frame[j]);
             }
 
         } else if (((protocol == PROTO_HITAG1) || (protocol == PROTO_HITAG2) || (protocol == PROTO_HITAGS))) {
 
-            // handle partial bytes.  The parity array[0] is used to store number of left over bits from NBYTES
-            // This part prints the number of bits in the trace entry for hitag.
-            uint8_t nbits = parityBytes[0];
             if (j == 0) {
 
-                // only apply this to lesser than one byte 
-                if (data_len == 1) {
-                    
-                    if (nbits == 5) {
-                        snprintf(line[0], 120, "%2u: %02x  ", nbits, frame[0] >> (8 - nbits));
-                    } else {
-                        snprintf(line[0], 120, "%2u: %02x  ", nbits, frame[0] >> (8 - nbits));
-                    }
+                // handle partial bytes.  The parity array[0] is used to store number of left over bits from NBYTES
+                // This part prints the number of bits in the trace entry for hitag.
+                uint8_t nbits = parityBytes[0];
+
+                // only apply this to lesser than one byte
+                if (data_len == 1 && nbits != 0) {
+
+                    snprintf(line[0], 120, "%2u: %02X  ", nbits, frame[0] >> (8 - nbits));
 
                 } else {
                     if (nbits == 0) {
-                        snprintf(line[0], 120, "%2u: %02x  ", (data_len * 8), frame[0]);
+                        snprintf(line[0], 120, "%2u: %02X  ", (uint16_t)(data_len * 8), frame[0]);
                     } else {
-                        snprintf(line[0], 120, "%2u: %02x  ", ((data_len - 1) * 8) + nbits, frame[0]);
+                        snprintf(line[0], 120, "%2u: %02X  ", (uint16_t)(((data_len - 1) * 8) + nbits), frame[0]);
                     }
                 }
                 offset = 4;
 
             } else {
-                snprintf(line[j / 18] + ((j % 18) * 4) + offset, 120, "%02x  ", frame[j]);
+                snprintf(line[j / 18] + ((j % 18) * 4) + offset, 120, "%02X  ", frame[j]);
             }
-            
+
         } else {
-            snprintf(line[j / 18] + ((j % 18) * 4), 120, "%02x  ", frame[j]);
+            snprintf(line[j / 18] + ((j % 18) * 4), 120, "%02X  ", frame[j]);
         }
 
     }
 
     if (markCRCBytes && data_len > 2) {
         // CRC-command
-        if (((protocol == PROTO_HITAG1) || (protocol == PROTO_HITAGS)) && (data_len > 1)) {
+        if (((protocol == PROTO_HITAG1) || (protocol == PROTO_HITAGS))) {
             // Note that UID REQUEST response has no CRC, but we don't know
             // if the response we see is a UID
             char *pos1 = line[(data_len - 1) / 18] + (((data_len - 1) % 18) * 4) + offset - 1;
@@ -774,10 +771,9 @@ static uint16_t printTraceLine(uint16_t tracepos, uint16_t traceLen, uint8_t *tr
 
     end_of_transmission_timestamp = hdr->timestamp + duration;
 
-    if (prev_eot)
+    if (prev_eot) {
         *prev_eot = end_of_transmission_timestamp;
-
-
+    }
 
     // Always annotate these protocols both reader/tag messages
     switch (protocol) {
@@ -793,7 +789,7 @@ static uint16_t printTraceLine(uint16_t tracepos, uint16_t traceLen, uint8_t *tr
             annotateHitag1(explanation, sizeof(explanation), frame, data_len, hdr->isResponse);
             break;
         case PROTO_HITAG2:
-            annotateHitag2(explanation, sizeof(explanation), frame, data_len, parityBytes[0], hdr->isResponse);
+            annotateHitag2(explanation, sizeof(explanation), frame, data_len, parityBytes[0], hdr->isResponse, mfDicKeys, mfDicKeysCount, false);
             break;
         case PROTO_HITAGS:
             annotateHitagS(explanation, sizeof(explanation), frame, data_len, hdr->isResponse);
@@ -979,13 +975,71 @@ static uint16_t printTraceLine(uint16_t tracepos, uint16_t traceLen, uint8_t *tr
         }
     }
 
+    if (protocol == PROTO_HITAG2) {
+
+        uint8_t ht2plain[9] = {0};
+        uint8_t n = 0;
+        if (hitag2_get_plain(ht2plain, &n)) {
+
+            memset(explanation, 0x00, sizeof(explanation));
+
+            // handle partial bytes.  The parity array[0] is used to store number of left over bits from NBYTES
+            // This part prints the number of bits in the trace entry for hitag.
+            uint8_t nbits = parityBytes[0];
+            annotateHitag2(explanation, sizeof(explanation), ht2plain, n, nbits, hdr->isResponse, NULL, 0, true);
+
+            // iceman: colorise crc bytes here will need a refactor of code from above.
+            for (int j = 0; j < n && (j / TRACE_MAX_HEX_BYTES) < TRACE_MAX_HEX_BYTES; j++) {
+
+
+                if (j == 0) {
+
+                    // only apply this to lesser than one byte
+                    if (n == 1) {
+                        snprintf(line[0], 120, "%2u: %02X  ", nbits, ht2plain[0] >> (8 - nbits));
+                    } else {
+
+                        if (nbits == 0) {
+                            snprintf(line[0], 120, "%2u: %02X  ", (uint16_t)(n * 8), ht2plain[0]);
+                        } else {
+                            snprintf(line[0], 120, "%2u: %02X  ", (uint16_t)(((n - 1) * 8) + nbits), ht2plain[0]);
+                        }
+                    }
+                    offset = 4;
+
+                } else {
+                    snprintf(line[j / 18] + ((j % 18) * 4) + offset, 120, "%02X  ", ht2plain[j]);
+                }
+            }
+
+            num_lines = MIN((n - 1) / TRACE_MAX_HEX_BYTES + 1, TRACE_MAX_HEX_BYTES);
+
+            for (int j = 0; j < num_lines ; j++) {
+                if (hdr->isResponse) {
+                    PrintAndLogEx(NORMAL, "            |            |  *  |%-*s | %-4s| %s",
+                                  str_padder,
+                                  line[j],
+                                  "    ",
+                                  explanation);
+                } else {
+                    PrintAndLogEx(NORMAL, "            |            |  *  |" _YELLOW_("%-*s")" | " _YELLOW_("%s") "| " _YELLOW_("%s"),
+                                  str_padder,
+                                  line[j],
+                                  "    ",
+                                  explanation);
+                }
+
+            }
+        }
+    }
+
     if (is_last_record(tracepos, traceLen)) {
         return traceLen;
     }
 
     if (showWaitCycles && hdr->isResponse == false && next_record_is_response(tracepos, trace)) {
 
-        tracelog_hdr_t *next_hdr = (tracelog_hdr_t *)(trace + tracepos);
+        const tracelog_hdr_t *next_hdr = (tracelog_hdr_t *)(trace + tracepos);
 
         uint32_t time1 = end_of_transmission_timestamp - first_hdr->timestamp;
         uint32_t time2 = next_hdr->timestamp - first_hdr->timestamp;
@@ -1245,9 +1299,9 @@ int CmdTraceList(const char *Cmd) {
                   "trace list -t cryptorf -> interpret as " _YELLOW_("CryptoRF") "\n\n"
                   "trace list -t des      -> interpret as " _YELLOW_("MIFARE DESFire") "\n"
                   "trace list -t felica   -> interpret as " _YELLOW_("ISO18092 / FeliCa") "\n"
-                  "trace list -t hitag1   -> interpret as " _YELLOW_("Hitag1") "\n"
-                  "trace list -t hitag2   -> interpret as " _YELLOW_("Hitag2") "\n"
-                  "trace list -t hitags   -> interpret as " _YELLOW_("HitagS") "\n"
+                  "trace list -t hitag1   -> interpret as " _YELLOW_("Hitag 1") "\n"
+                  "trace list -t hitag2   -> interpret as " _YELLOW_("Hitag 2") "\n"
+                  "trace list -t hitags   -> interpret as " _YELLOW_("Hitag S") "\n"
                   "trace list -t iclass   -> interpret as " _YELLOW_("iCLASS") "\n"
                   "trace list -t legic    -> interpret as " _YELLOW_("LEGIC") "\n"
                   "trace list -t lto      -> interpret as " _YELLOW_("LTO-CM") "\n"
@@ -1332,7 +1386,13 @@ int CmdTraceList(const char *Cmd) {
     if (use_buffer == false) {
         download_trace();
     } else if (gs_traceLen == 0 || gs_trace == NULL) {
-        PrintAndLogEx(FAILED, "You requested a trace list in offline mode but there is no trace.");
+
+        if (IfPm3Present() == false) {
+            PrintAndLogEx(FAILED, "You requested a trace list in offline mode but there is no trace.");
+        } else {
+            PrintAndLogEx(FAILED, "You requested a trace list but there is no trace.");
+        }
+
         PrintAndLogEx(FAILED, "Consider using `" _YELLOW_("trace load") "` or removing parameter `" _YELLOW_("-1") "`");
         return PM3_EINVARG;
     }
@@ -1394,10 +1454,10 @@ int CmdTraceList(const char *Cmd) {
         }
 
         if (protocol == ISO_7816_4)
-            PrintAndLogEx(INFO, _YELLOW_("ISO7816-4 / Smartcard") " - Timings N/A");
+            PrintAndLogEx(INFO, _YELLOW_("ISO7816-4 / Smartcard") " - Timings n/a");
 
         if (protocol == PROTO_HITAG1 || protocol == PROTO_HITAG2 || protocol == PROTO_HITAGS) {
-            PrintAndLogEx(INFO, _YELLOW_("Hitag1 / Hitag2 / HitagS") " - Timings in ETU (8us)");
+            PrintAndLogEx(INFO, _YELLOW_("Hitag 1 / Hitag 2 / Hitag S") " - Timings in ETU (8us)");
         }
 
         if (protocol == FELICA) {
@@ -1436,6 +1496,30 @@ int CmdTraceList(const char *Cmd) {
             }
         }
 
+        if (protocol == PROTO_HITAG2) {
+
+            if (strlen(dictionary) == 0) {
+                snprintf(dictionary, sizeof(dictionary), HITAG_DICTIONARY);
+            }
+
+            // load keys
+            uint8_t *keyBlock = NULL;
+            int res = loadFileDICTIONARY_safe(dictionary, (void **) &keyBlock, HITAG_CRYPTOKEY_SIZE, &dicKeysCount);
+            if (res != PM3_SUCCESS || dicKeysCount == 0 || keyBlock == NULL) {
+                PrintAndLogEx(FAILED, "An error occurred while loading the dictionary!");
+            } else {
+                dicKeys = calloc(dicKeysCount, sizeof(uint64_t));
+                for (int i = 0; i < dicKeysCount; i++) {
+                    uint64_t key = bytes_to_num(keyBlock + i * HITAG_CRYPTOKEY_SIZE, HITAG_CRYPTOKEY_SIZE);
+                    memcpy((uint8_t *) &dicKeys[i], &key, sizeof(uint64_t));
+                }
+                dictionaryLoad = true;
+            }
+            if (keyBlock != NULL) {
+                free(keyBlock);
+            }
+        }
+
         PrintAndLogEx(NORMAL, "");
         if (use_relative) {
             PrintAndLogEx(NORMAL, "        Gap |   Duration | Src | Data (! denotes parity error, ' denotes short bytes)                    | CRC | Annotation");
@@ -1463,16 +1547,20 @@ int CmdTraceList(const char *Cmd) {
         while (tracepos < gs_traceLen) {
             tracepos = printTraceLine(tracepos, gs_traceLen, gs_trace, protocol, show_wait_cycles, mark_crc, prev_EOT, use_us, dicKeys, dicKeysCount);
 
-            if (kbd_enter_pressed())
+            if (kbd_enter_pressed()) {
+                PrintAndLogEx(INFO, "User interrupted detected. Aborting");
                 break;
+            }
         }
 
-        if (dictionaryLoad)
+        if (dictionaryLoad)  {
             free((void *) dicKeys);
+        }
     }
 
-    if (show_hex)
+    if (show_hex) {
         PrintAndLogEx(HINT, "syntax to use: " _YELLOW_("`text2pcap -t \"%%S.\" -l 264 -n <input-text-file> <output-pcapng-file>`"));
+    }
 
     return PM3_SUCCESS;
 }

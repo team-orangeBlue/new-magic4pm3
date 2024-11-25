@@ -152,7 +152,9 @@ void computeSignalProperties(const uint8_t *samples, uint32_t size) {
 }
 
 void removeSignalOffset(uint8_t *samples, uint32_t size) {
-    if (samples == NULL || size < SIGNAL_MIN_SAMPLES) return;
+    if (samples == NULL || size < SIGNAL_MIN_SAMPLES) {
+        return;
+    }
 
     int acc_off = 0;
     uint32_t offset_size = size - SIGNAL_IGNORE_FIRST_SAMPLES;
@@ -241,14 +243,18 @@ size_t removeParity(uint8_t *bits, size_t startIdx, uint8_t pLen, uint8_t pType,
         // if parity fails then return 0
         switch (pType) {
             case 3:
-                if (bits[bitCnt] == 1) {return 0;}
-                break; //should be 0 spacer bit
+                if (bits[bitCnt] == 1) {
+                    return 0;
+                }
+                break; // should be 0 spacer bit
             case 2:
-                if (bits[bitCnt] == 0) {return 0;}
-                break; //should be 1 spacer bit
+                if (bits[bitCnt] == 0) {
+                    return 0;
+                }
+                break; // should be 1 spacer bit
             default:
                 if (parityTest(parityWd, pLen, pType) == 0) { return 0; }
-                break; //test parity
+                break; // test parity
         }
         parityWd = 0;
     }
@@ -257,7 +263,7 @@ size_t removeParity(uint8_t *bits, size_t startIdx, uint8_t pLen, uint8_t pType,
     return bitCnt;
 }
 
-static size_t removeEm410xParity(uint8_t *bits, size_t startIdx, bool isLong, bool *validShort, bool *validShortExtended, bool *validLong) {
+static size_t removeEm410xParity(uint8_t *bits, size_t startIdx, size_t *size, bool *validShort, bool *validShortExtended, bool *validLong) {
     uint32_t parityWd = 0;
     size_t bitCnt = 0;
     bool validColParity = false;
@@ -266,16 +272,28 @@ static size_t removeEm410xParity(uint8_t *bits, size_t startIdx, bool isLong, bo
     *validShort = false;
     *validShortExtended = false;
     *validLong = false;
-    uint8_t bLen = isLong ? 110 : 55;
+
+    uint8_t blen = 55;
+    switch (*size) {
+        case 128:
+            blen = 110;
+            break;
+        case 80:
+            blen = 70;
+            break;
+        default:
+            blen = 55;
+            break;
+    }
+
     uint16_t parityCol[4] = { 0, 0, 0, 0 };
 
-    for (int word = 0; word < bLen; word += 5) {
+    for (int word = 0; word < blen; word += 5) {
         for (int bit = 0; bit < 5; bit++) {
 
-            if (word + bit >= bLen) {
+            if (word + bit >= blen) {
                 break;
             }
-
             parityWd = (parityWd << 1) | bits[startIdx + word + bit];
 
             if ((word <= 50) && (bit < 4)) {
@@ -284,10 +302,12 @@ static size_t removeEm410xParity(uint8_t *bits, size_t startIdx, bool isLong, bo
 
             bits[bitCnt++] = (bits[startIdx + word + bit]);
         }
-        if (word + 5 > bLen) break;
+
+        if (word + 5 > blen) break;
 
         bitCnt--; // overwrite parity with next data
         validRowParity &= parityTest(parityWd, 5, 0) != 0;
+
         if (word == 50) { // column parity nibble on short EM and on Electra
             validColParity = parityTest(parityCol[0], 11, 0) != 0;
             validColParity &= parityTest(parityCol[1], 11, 0) != 0;
@@ -298,15 +318,16 @@ static size_t removeEm410xParity(uint8_t *bits, size_t startIdx, bool isLong, bo
         }
         parityWd = 0;
     }
-    if (!isLong && validRowParitySkipColP && validColParity) {
+
+    if ((blen != 128) && validRowParitySkipColP && validColParity) {
         *validShort = true;
     }
 
-    if (isLong && validRowParity) {
+    if ((blen == 128) && validRowParity) {
         *validLong = true;
     }
 
-    if (isLong && validRowParitySkipColP && validColParity) {
+    if ((blen == 128) && validRowParitySkipColP && validColParity) {
         *validShortExtended = true;
     }
 
@@ -411,27 +432,43 @@ bool preambleSearchEx(uint8_t *bits, uint8_t *preamble, size_t pLen, size_t *siz
 
 // find start of modulating data (for fsk and psk) in case of beginning noise or slow chip startup.
 static size_t findModStart(const uint8_t *src, size_t size, uint8_t expWaveSize) {
+
     size_t i = 0;
     size_t waveSizeCnt = 0;
     uint8_t thresholdCnt = 0;
-    bool isAboveThreshold = src[i++] >= signalprop.mean; //FSK_PSK_THRESHOLD;
+
+    // FSK_PSK_THRESHOLD;
+    bool isAboveThreshold = (src[i++] >= signalprop.mean);
+
     for (; i < size - 20; i++) {
         if (src[i] < signalprop.mean && isAboveThreshold) {
             thresholdCnt++;
-            if (thresholdCnt > 2 && waveSizeCnt < expWaveSize + 1) break;
+            if (thresholdCnt > 2 && waveSizeCnt < expWaveSize + 1) {
+                break;
+            }
             isAboveThreshold = false;
             waveSizeCnt = 0;
+
         } else if (src[i] >= signalprop.mean && !isAboveThreshold) {
             thresholdCnt++;
-            if (thresholdCnt > 2 && waveSizeCnt < expWaveSize + 1) break;
+            if (thresholdCnt > 2 && waveSizeCnt < expWaveSize + 1) {
+                break;
+            }
             isAboveThreshold = true;
             waveSizeCnt = 0;
+
         } else {
             waveSizeCnt++;
         }
-        if (thresholdCnt > 10) break;
+
+        if (thresholdCnt > 10) {
+            break;
+        }
     }
-    if (g_debugMode == 2) prnt("DEBUG: threshold Count reached at index %zu, count: %u", i, thresholdCnt);
+
+    if (g_debugMode == 2) {
+        prnt("DEBUG: threshold Count reached at index %zu, count: %u", i, thresholdCnt);
+    }
     return i;
 }
 
@@ -717,7 +754,7 @@ int DetectStrongAskClock(uint8_t *dest, size_t size, int high, int low, int *clo
 int DetectASKClock(uint8_t *dest, size_t size, int *clock, int maxErr) {
 
     //don't need to loop through entire array. (cotag has clock of 384)
-    uint16_t loopCnt = 2000;
+    uint16_t loopCnt = 1000;
 
     // not enough samples
     if (size <= loopCnt + 60) {
@@ -1577,35 +1614,43 @@ int BiphaseRawDecode(uint8_t *bits, size_t *size, int *offset, int invert) {
 uint16_t manrawdecode(uint8_t *bits, size_t *size, uint8_t invert, uint8_t *alignPos) {
 
     // sanity check
-    if (*size < 16) return 0xFFFF;
+    if (*size < 16) {
+        return 0xFFFF;
+    }
 
     int errCnt = 0, bestErr = 1000;
     uint16_t bitnum = 0, maxBits = MAX_DEMODULATION_BITS, bestRun = 0;
     size_t i;
 
-    //find correct start position [alignment]
+    // find correct start position [alignment]
     for (uint8_t k = 0; k < 2; k++) {
 
         for (i = k; i < *size - 1; i += 2) {
 
-            if (bits[i] == bits[i + 1])
+            if (bits[i] == bits[i + 1]) {
                 errCnt++;
+            }
 
-            if (errCnt > 50)
+            if (errCnt > 50) {
                 break;
+            }
         }
 
         if (bestErr > errCnt) {
+
             bestErr = errCnt;
             bestRun = k;
+
             if (g_debugMode == 2) prnt("DEBUG manrawdecode: bestErr %d | bestRun %u", bestErr, bestRun);
         }
+
         errCnt = 0;
     }
 
     *alignPos = bestRun;
-    //decode
+    // decode
     for (i = bestRun; i < *size; i += 2) {
+
         if (bits[i] == 1 && (bits[i + 1] == 0)) {
             bits[bitnum++] = invert;
         } else if ((bits[i] == 0) && bits[i + 1] == 1) {
@@ -1613,8 +1658,12 @@ uint16_t manrawdecode(uint8_t *bits, size_t *size, uint8_t invert, uint8_t *alig
         } else {
             bits[bitnum++] = 7;
         }
-        if (bitnum > maxBits) break;
+
+        if (bitnum > maxBits) {
+            break;
+        }
     }
+
     *size = bitnum;
     return bestErr;
 }
@@ -2189,6 +2238,11 @@ int Em410xDecode(uint8_t *bits, size_t *size, size_t *start_idx, uint32_t *hi, u
 
     *start_idx = 0;
 
+    bool adjust = false;
+    if (*size < 128) {
+        adjust = true;
+    }
+
     // preamble 0111111111
     // include 0 in front to help get start pos
     uint8_t preamble[] = {0, 1, 1, 1, 1, 1, 1, 1, 1, 1};
@@ -2198,7 +2252,36 @@ int Em410xDecode(uint8_t *bits, size_t *size, size_t *start_idx, uint32_t *hi, u
     bool validShort = false;
     bool validShortExtended = false;
     bool validLong = false;
-    *size = removeEm410xParity(bits, *start_idx + sizeof(preamble), *size == 128, &validShort, &validShortExtended, &validLong);
+
+    // detect sledge of 0x05's
+    int fix = -1;
+    uint8_t fives[] = {0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1};
+    for (size_t x = 0; x < *size - sizeof(fives); x += 1) {
+        if (memcmp(bits + x, fives, sizeof(fives)) == 0) {
+            // save first occasion
+            if (fix == -1) {
+                fix = x;
+                break;
+            }
+        }
+    }
+
+    size_t sidx = *start_idx + sizeof(preamble);
+    if (adjust) {
+        sidx--;
+    }
+    // not 128 or 55..
+    if (fix != -1) {
+        *size = 80;
+    }
+
+#ifndef ON_DEVICE
+//    prnt("fix... %d   size... %zu", fix, *size);
+#endif
+
+
+    // HACK
+    *size = removeEm410xParity(bits, sidx, size, &validShort, &validShortExtended, &validLong);
 
     if (validShort) {
         // std em410x format

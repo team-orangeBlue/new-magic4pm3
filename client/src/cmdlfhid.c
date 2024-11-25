@@ -58,8 +58,9 @@ static int sendPing(void) {
     SendCommandNG(CMD_PING, NULL, 0);
     clearCommandBuffer();
     PacketResponseNG resp;
-    if (!WaitForResponseTimeout(CMD_PING, &resp, 1000))
+    if (WaitForResponseTimeout(CMD_PING, &resp, 1000) == false) {
         return PM3_ETIMEOUT;
+    }
     return PM3_SUCCESS;
 }
 static int sendTry(uint8_t format_idx, wiegand_card_t *card, uint32_t delay, bool verbose) {
@@ -122,7 +123,7 @@ int demodHID(bool verbose) {
         PrintAndLogEx(FAILED, "failed to allocate memory");
         return PM3_EMALLOC;
     }
-    size_t size = getFromGraphBuf(bits);
+    size_t size = getFromGraphBuffer(bits);
     if (size == 0) {
         PrintAndLogEx(DEBUG, "DEBUG: Error - " _RED_("HID not enough samples"));
         free(bits);
@@ -375,8 +376,10 @@ static int CmdHIDClone(const char *Cmd) {
     bool q5 = arg_get_lit(ctx, 7);
     bool em = arg_get_lit(ctx, 8);
 
-    int bin_len = 63;
-    uint8_t bin[70] = {0};
+    // t5577 can do 6 blocks with 32bits == 192 bits, HID is manchester encoded and doubles in length.
+    // With parity, manchester and preamble we have about 3 blocks to play with.  Ie:  96 bits
+    uint8_t bin[97] = {0};
+    int bin_len = sizeof(bin) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     CLIGetStrWithReturn(ctx, 9, bin, &bin_len);
     CLIParserFree(ctx);
 
@@ -385,8 +388,8 @@ static int CmdHIDClone(const char *Cmd) {
         return PM3_EINVARG;
     }
 
-    if (bin_len > 127) {
-        PrintAndLogEx(ERR, "Binary wiegand string must be less than 128 bits");
+    if (bin_len > 96) {
+        PrintAndLogEx(ERR, "Binary wiegand string must be less than 96 bits");
         return PM3_EINVARG;
     }
 
@@ -469,15 +472,17 @@ static int CmdHIDClone(const char *Cmd) {
 
     clearCommandBuffer();
     SendCommandNG(CMD_LF_HID_CLONE, (uint8_t *)&payload, sizeof(payload));
-
     PacketResponseNG resp;
-    WaitForResponse(CMD_LF_HID_CLONE, &resp);
+    if (WaitForResponseTimeout(CMD_LF_HID_CLONE, &resp, 2000) == false) {
+        PrintAndLogEx(WARNING, "timeout while waiting for reply.");
+        return PM3_ETIMEOUT;
+    }
+
     if (resp.status == PM3_SUCCESS) {
+        PrintAndLogEx(SUCCESS, "Done!");
         PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf hid reader`") " to verify");
-        PrintAndLogEx(INFO, "Done!");
     } else {
         PrintAndLogEx(FAILED, "cloning ( " _RED_("fail") " )");
-
     }
     return resp.status;
 }
@@ -679,7 +684,7 @@ static command_t CommandTable[] = {
     {"help",    CmdHelp,        AlwaysAvailable, "this help"},
     {"demod",   CmdHIDDemod,    AlwaysAvailable, "demodulate HID Prox tag from the GraphBuffer"},
     {"reader",  CmdHIDReader,   IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",   CmdHIDClone,    IfPm3Lf,         "clone HID tag to T55x7"},
+    {"clone",   CmdHIDClone,    IfPm3Lf,         "clone HID tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",     CmdHIDSim,      IfPm3Lf,         "simulate HID tag"},
     {"brute",   CmdHIDBrute,    IfPm3Lf,         "bruteforce facility code or card number against reader"},
     {"watch",   CmdHIDWatch,    IfPm3Lf,         "continuously watch for cards.  Reader mode"},

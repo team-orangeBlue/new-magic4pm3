@@ -108,7 +108,7 @@ int demodParadox(bool verbose, bool oldChksum) {
         PrintAndLogEx(FAILED, "failed to allocate memory");
         return PM3_EMALLOC;
     }
-    size_t size = getFromGraphBuf(bits);
+    size_t size = getFromGraphBuffer(bits);
     if (size == 0) {
         PrintAndLogEx(DEBUG, "DEBUG: Error - Paradox not enough samples");
         free(bits);
@@ -383,7 +383,7 @@ static int CmdParadoxClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf paradox read`") " to verify");
     return res;
 }
@@ -471,7 +471,7 @@ static command_t CommandTable[] = {
     {"help",   CmdHelp,          AlwaysAvailable, "This help"},
     {"demod",  CmdParadoxDemod,  AlwaysAvailable, "demodulate a Paradox FSK tag from the GraphBuffer"},
     {"reader", CmdParadoxReader, IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",  CmdParadoxClone,  IfPm3Lf,         "clone paradox tag"},
+    {"clone",  CmdParadoxClone,  IfPm3Lf,         "clone paradox tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",    CmdParadoxSim,    IfPm3Lf,         "simulate paradox tag"},
     {NULL, NULL, NULL, NULL}
 };

@@ -48,7 +48,7 @@ int demodPyramid(bool verbose) {
         PrintAndLogEx(FAILED, "failed to allocate memory");
         return PM3_EMALLOC;
     }
-    size_t size = getFromGraphBuf(bits);
+    size_t size = getFromGraphBuffer(bits);
     if (size == 0) {
         PrintAndLogEx(DEBUG, "DEBUG: Error - Pyramid not enough samples");
         free(bits);
@@ -355,7 +355,7 @@ static int CmdPyramidClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf pyramid reader`") " to verify");
     return res;
 }
@@ -444,7 +444,7 @@ static command_t CommandTable[] = {
     {"help",    CmdHelp,          AlwaysAvailable, "this help"},
     {"demod",   CmdPyramidDemod,  AlwaysAvailable, "demodulate a Pyramid FSK tag from the GraphBuffer"},
     {"reader",  CmdPyramidReader, IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",   CmdPyramidClone,  IfPm3Lf,         "clone pyramid tag to T55x7 or Q5/T5555"},
+    {"clone",   CmdPyramidClone,  IfPm3Lf,         "clone pyramid tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",     CmdPyramidSim,    IfPm3Lf,         "simulate pyramid tag"},
     {NULL, NULL, NULL, NULL}
 };

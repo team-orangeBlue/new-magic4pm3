@@ -122,6 +122,23 @@ static const productName_t uidmapping[] = {
     { 0xE002080000000000LL, 24, "ST Microelectronics; LRI2K   [IC id = 08]"},
     { 0xE0020A0000000000LL, 24, "ST Microelectronics; LRIS2K  [IC id = 10]"},
     { 0xE002440000000000LL, 24, "ST Microelectronics; LRIS64K [IC id = 68]"},
+    { 0xe002230000000000LL, 24, "ST Microelectronics; ST25TV02K"},
+    { 0xe002230000000000LL, 24, "ST Microelectronics; ST25TV512"},
+    { 0xe002080000000000LL, 24, "ST Microelectronics; ST25TV02KC"},
+    { 0xe002080000000000LL, 24, "ST Microelectronics; ST25TV512C"},
+    { 0xe002350000000000LL, 24, "ST Microelectronics; ST25TV04K-P"},
+    { 0xe002480000000000LL, 24, "ST Microelectronics; ST25TV16K"},
+    { 0xe002480000000000LL, 24, "ST Microelectronics; ST25TV64K"},
+
+    /*
+    ST25TV02K    0xe0 02 23
+    ST25TV512    0xe0 02 23
+    ST25TV02KC    0xe00208
+    ST25TV512C    0xe00208
+    ST25TV04K-P    0xe00235
+    ST25TV16K    0xe00248
+    ST25TV64K    0xe00248
+    */
 
     { 0xE003000000000000LL, 16, "Hitachi, Ltd Japan" },
 
@@ -267,14 +284,16 @@ static int nxp_15693_print_signature(uint8_t *uid, uint8_t *signature) {
 
 #define PUBLIC_ECDA_KEYLEN 33
     const ecdsa_publickey_t nxp_15693_public_keys[] = {
-        {"NXP MIFARE Classic MFC1C14_x",       "044F6D3F294DEA5737F0F46FFEE88A356EED95695DD7E0C27A591E6F6F65962BAF"},
-        {"Manufacturer MIFARE Classic / QL88", "046F70AC557F5461CE5052C8E4A7838C11C7A236797E8A0730A101837C004039C2"},
-        {"NXP ICODE DNA, ICODE SLIX2",         "048878A2A2D3EEC336B4F261A082BD71F9BE11C4E2E896648B32EFA59CEA6E59F0"},
-        {"NXP Public key",                     "04A748B6A632FBEE2C0897702B33BEA1C074998E17B84ACA04FF267E5D2C91F6DC"},
-        {"NXP Ultralight Ev1",                 "0490933BDCD6E99B4E255E3DA55389A827564E11718E017292FAF23226A96614B8"},
-        {"NXP NTAG21x (2013)",                 "04494E1A386D3D3CFE3DC10E5DE68A499B1C202DB5B132393E89ED19FE5BE8BC61"},
-        {"MIKRON Public key",                  "04f971eda742a4a80d32dcf6a814a707cc3dc396d35902f72929fdcd698b3468f2"},
-        {"VivoKey Spark1 Public key",          "04d64bb732c0d214e7ec580736acf847284b502c25c0f7f2fa86aace1dada4387a"},
+        {"NXP MIFARE Classic MFC1C14_x",   "044F6D3F294DEA5737F0F46FFEE88A356EED95695DD7E0C27A591E6F6F65962BAF"},
+        {"MIFARE Classic / QL88",          "046F70AC557F5461CE5052C8E4A7838C11C7A236797E8A0730A101837C004039C2"},
+        {"NXP ICODE DNA, ICODE SLIX2",     "048878A2A2D3EEC336B4F261A082BD71F9BE11C4E2E896648B32EFA59CEA6E59F0"},
+        {"NXP Public key",                 "04A748B6A632FBEE2C0897702B33BEA1C074998E17B84ACA04FF267E5D2C91F6DC"},
+        {"NXP Ultralight Ev1",             "0490933BDCD6E99B4E255E3DA55389A827564E11718E017292FAF23226A96614B8"},
+        {"NXP NTAG21x (2013)",             "04494E1A386D3D3CFE3DC10E5DE68A499B1C202DB5B132393E89ED19FE5BE8BC61"},
+        {"MIKRON Public key",              "04F971EDA742A4A80D32DCF6A814A707CC3DC396D35902F72929FDCD698B3468F2"},
+        {"VivoKey Spark1 Public key",      "04D64BB732C0D214E7EC580736ACF847284B502C25C0F7F2FA86AACE1DADA4387A"},
+        {"TruST25 (ST) key 01?",           "041D92163650161A2548D33881C235D0FB2315C2C31A442F23C87ACF14497C0CBA"},
+        {"TruST25 (ST) key 04?",           "04101E188A8B4CDDBC62D5BC3E0E6850F0C2730E744B79765A0E079907FBDB01BC"},
     };
     /*
         uint8_t nxp_15693_public_keys[][PUBLIC_ECDA_KEYLEN] = {
@@ -354,7 +373,6 @@ static int nxp_15693_print_signature(uint8_t *uid, uint8_t *signature) {
             break;
         }
 
-
         // try with sha256
         res = ecdsa_signature_r_s_verify(MBEDTLS_ECP_DP_SECP128R1, key, revuid, sizeof(revuid), revsign, sizeof(revsign), true);
         is_valid = (res == 0);
@@ -398,7 +416,7 @@ static int nxp_15693_print_signature(uint8_t *uid, uint8_t *signature) {
 // get a product description based on the UID
 // uid[8] tag uid
 // returns description of the best match
-static const char *getTagInfo_15(uint8_t *uid) {
+static const char *getTagInfo_15(const uint8_t *uid) {
     if (uid == NULL) {
         return "";
     }
@@ -454,6 +472,26 @@ static const char *TagErrorStr(uint8_t error) {
             return "Reserved for Future Use or Custom command error.";
     }
 }
+
+
+static int iso15_error_handling_card_response(uint8_t *d, uint16_t n) {
+    if (check_crc(CRC_15693, d, n) == false) {
+        PrintAndLogEx(FAILED, "crc ( " _RED_("fail") " )");
+        return PM3_ECRC;
+    }
+
+    if ((d[0] & ISO15_RES_ERROR) == ISO15_RES_ERROR) {
+        if (d[1] == 0x0F || d[1] == 0x10) {
+            return PM3_EOUTOFBOUND;
+        }
+
+        PrintAndLogEx(ERR, "iso15693 card returned error %i: %s", d[0], TagErrorStr(d[0]));
+        return PM3_EWRONGANSWER;
+    }
+
+    return PM3_SUCCESS;
+}
+
 
 // fast method to just read the UID of a tag (collision detection not supported)
 //  *buf should be large enough to fit the 64bit uid
@@ -696,7 +734,7 @@ static int CmdHF15Samples(const char *Cmd) {
     return PM3_SUCCESS;
 }
 
-static int NxpTestEAS(uint8_t *uid) {
+static int NxpTestEAS(const uint8_t *uid) {
 
     if (uid == NULL) {
         return PM3_EINVARG;
@@ -1062,7 +1100,7 @@ static int CmdHF15Info(const char *Cmd) {
         PrintAndLogEx(SUCCESS, "    " _YELLOW_("%u") " ( or " _YELLOW_("%u") " ) bytes/blocks x " _YELLOW_("%u") " blocks", size + 1, size, blocks);
         PrintAndLogEx(SUCCESS, "    " _YELLOW_("%u") " total bytes", ((size + 1) * blocks));
     } else {
-        PrintAndLogEx(SUCCESS, "    N/A");
+        PrintAndLogEx(SUCCESS, "    n/a");
     }
 
     // Check if SLIX2 and attempt to get NXP System Information
@@ -1141,10 +1179,12 @@ static void hf15EmlClear(void) {
     clearCommandBuffer();
     SendCommandNG(CMD_HF_ISO15693_EML_CLEAR, NULL, 0);
     PacketResponseNG resp;
-    WaitForResponse(CMD_HF_ISO15693_EML_CLEAR, &resp);
+    if (WaitForResponseTimeout(CMD_HF_ISO15693_EML_CLEAR, &resp, 2500) == false) {
+        PrintAndLogEx(WARNING, "timeout while waiting for reply.");
+    }
 }
 
-static int hf15EmlSetMem(uint8_t *data, uint16_t count, size_t offset) {
+static int hf15EmlSetMem(const uint8_t *data, uint16_t count, size_t offset) {
     struct p {
         uint32_t offset;
         uint16_t count;
@@ -1194,13 +1234,14 @@ static int CmdHF15ELoad(const char *Cmd) {
         return res;
     }
 
-    if (bytes_read != sizeof(iso15_tag_t)) {
-        PrintAndLogEx(FAILED, "Memory image is not matching tag structure.");
+    if (bytes_read == 0) {
+        PrintAndLogEx(FAILED, "Memory image empty.");
         free(tag);
         return PM3_EINVARG;
     }
-    if (bytes_read == 0) {
-        PrintAndLogEx(FAILED, "Memory image empty.");
+
+    if (bytes_read != sizeof(iso15_tag_t)) {
+        PrintAndLogEx(FAILED, "Memory image is not matching tag structure.");
         free(tag);
         return PM3_EINVARG;
     }
@@ -1317,7 +1358,7 @@ static void print_blocks_15693(iso15_tag_t *tag, bool dense_output) {
 
     for (int i = 0; i < tag->pagesCount; i++) {
 
-        uint8_t *blk = d + (i * blocksize);
+        const uint8_t *blk = d + (i * blocksize);
 
         // suppress repeating blocks, truncate as such that the first and last block with the same data is shown
         // but the blocks in between are replaced with a single line of "......" if dense_output is enabled
@@ -1812,6 +1853,7 @@ static int CmdHF15Dump(const char *Cmd) {
     iso15_tag_t *tag = (iso15_tag_t *)calloc(1, sizeof(iso15_tag_t));
     if (tag == NULL) {
         PrintAndLogEx(FAILED, "failed to allocate memory");
+        free(packet);
         return PM3_EMALLOC;
     };
 
@@ -1826,6 +1868,7 @@ static int CmdHF15Dump(const char *Cmd) {
             PrintAndLogEx(INFO, "Using scan mode");
             if (getUID(verbose, false, uid) != PM3_SUCCESS) {
                 free(packet);
+                free(tag);
                 PrintAndLogEx(WARNING, "no tag found");
                 return PM3_EINVARG;
             }
@@ -1855,18 +1898,27 @@ static int CmdHF15Dump(const char *Cmd) {
     PacketResponseNG resp;
     if (WaitForResponseTimeout(CMD_HF_ISO15693_COMMAND, &resp, 2000) == false) {
         PrintAndLogEx(DEBUG, "iso15693 timeout");
+        free(packet);
+        free(tag);
         return PM3_ETIMEOUT;
     }
 
     if (resp.length < 2) {
         PrintAndLogEx(WARNING, "iso15693 card doesn't answer to systeminfo command (%d)", resp.length);
+        free(packet);
+        free(tag);
         return PM3_EWRONGANSWER;
     }
 
     uint8_t *d = resp.data.asBytes;
     uint8_t dCpt = 10;
 
-    ISO15_ERROR_HANDLING_CARD_RESPONSE(d, resp.length);
+    int res = iso15_error_handling_card_response(d, resp.length);
+    if (res != PM3_SUCCESS) {
+        free(tag);
+        free(packet);
+        return res;
+    }
 
     memcpy(tag->uid, &d[2], 8);
 
@@ -1973,6 +2025,7 @@ static int CmdHF15Dump(const char *Cmd) {
     if (no_save) {
         PrintAndLogEx(INFO, "Called with no save option");
         PrintAndLogEx(NORMAL, "");
+        free(tag);
         return PM3_SUCCESS;
     }
 
@@ -1986,6 +2039,7 @@ static int CmdHF15Dump(const char *Cmd) {
 
     pm3_save_dump(filename, (uint8_t *)tag, sizeof(iso15_tag_t), jsf15_v4);
 
+    free(tag);
     return PM3_SUCCESS;
 }
 
@@ -2418,7 +2472,7 @@ static int CmdHF15Readblock(const char *Cmd) {
     return PM3_SUCCESS;
 }
 
-static int hf_15_write_blk(uint8_t *pm3flags, uint16_t flags, uint8_t *uid, bool fast, uint8_t blockno, uint8_t *data, uint8_t dlen) {
+static int hf_15_write_blk(const uint8_t *pm3flags, uint16_t flags, const uint8_t *uid, bool fast, uint8_t blockno, const uint8_t *data, uint8_t dlen) {
 
     // request to be sent to device/card
     //   2 + 8 + 1 + (4|8) + 2
@@ -2642,13 +2696,14 @@ static int CmdHF15Restore(const char *Cmd) {
         return res;
     }
 
-    if (bytes_read != sizeof(iso15_tag_t)) {
-        PrintAndLogEx(FAILED, "Memory image is not matching tag structure.");
+    if (bytes_read == 0) {
+        PrintAndLogEx(FAILED, "Memory image empty.");
         free(tag);
         return PM3_EINVARG;
     }
-    if (bytes_read == 0) {
-        PrintAndLogEx(FAILED, "Memory image empty.");
+
+    if (bytes_read != sizeof(iso15_tag_t)) {
+        PrintAndLogEx(FAILED, "Memory image is not matching tag structure.");
         free(tag);
         return PM3_EINVARG;
     }
@@ -2676,7 +2731,7 @@ static int CmdHF15Restore(const char *Cmd) {
     size_t bytes = 0;
     uint16_t i = 0;
     uint8_t *data = calloc(tag->bytesPerPage, sizeof(uint8_t));
-    uint32_t tried = 0;
+    uint32_t tried;
     while (bytes < (tag->pagesCount * tag->bytesPerPage)) {
 
         // copy over the data to the request
@@ -2735,11 +2790,14 @@ static int CmdHF15CSetUID(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf 15 csetuid",
                   "Set UID for magic Chinese card (only works with such cards)\n",
-                  "hf 15 csetuid -u E011223344556677");
+                  "hf 15 csetuid -u E011223344556677       -> use gen1 command\n"
+                  "hf 15 csetuid -u E011223344556677 --v2  -> use gen2 command"
+                 );
 
     void *argtable[] = {
         arg_param_begin,
         arg_str1("u", "uid", "<hex>", "UID, 8 hex bytes"),
+        arg_lit0("2", "v2", "Use gen2 magic command"),
         arg_param_end
     };
     CLIExecWithReturn(ctx, Cmd, argtable, false);
@@ -2750,6 +2808,7 @@ static int CmdHF15CSetUID(const char *Cmd) {
 
     int uidlen = 0;
     CLIGetHexWithReturn(ctx, 1, payload.uid, &uidlen);
+    bool use_v2 = arg_get_lit(ctx, 2);
     CLIParserFree(ctx);
 
     if (uidlen != HF15_UID_LENGTH) {
@@ -2775,8 +2834,14 @@ static int CmdHF15CSetUID(const char *Cmd) {
     PrintAndLogEx(INFO, "Writing...");
     PacketResponseNG resp;
     clearCommandBuffer();
-    SendCommandNG(CMD_HF_ISO15693_CSETUID, (uint8_t *)&payload, sizeof(payload));
-    if (WaitForResponseTimeout(CMD_HF_ISO15693_CSETUID, &resp, 2000) == false) {
+
+    uint16_t cmd = CMD_HF_ISO15693_CSETUID;
+    if (use_v2) {
+        cmd = CMD_HF_ISO15693_CSETUID_V2;
+    }
+
+    SendCommandNG(cmd, (uint8_t *)&payload, sizeof(payload));
+    if (WaitForResponseTimeout(cmd, &resp, 2000) == false) {
         PrintAndLogEx(WARNING, "timeout while waiting for reply");
         DropField();
         return PM3_ESOFT;
@@ -3296,13 +3361,14 @@ static int CmdHF15View(const char *Cmd) {
         return res;
     }
 
-    if (bytes_read != sizeof(iso15_tag_t)) {
-        PrintAndLogEx(FAILED, "Memory image is not matching tag structure.");
+    if (bytes_read == 0) {
+        PrintAndLogEx(FAILED, "Memory image empty.");
         free(tag);
         return PM3_EINVARG;
     }
-    if (bytes_read == 0) {
-        PrintAndLogEx(FAILED, "Memory image empty.");
+
+    if (bytes_read != sizeof(iso15_tag_t)) {
+        PrintAndLogEx(FAILED, "Memory image is not matching tag structure.");
         free(tag);
         return PM3_EINVARG;
     }

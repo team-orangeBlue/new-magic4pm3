@@ -49,9 +49,10 @@ session_arg_t g_session;
 
 double g_CursorScaleFactor = 1;
 char g_CursorScaleFactorUnit[11] = {0};
-double g_PlotGridX = 0, g_PlotGridY = 0, g_PlotGridXdefault = 64, g_PlotGridYdefault = 64;
-uint32_t g_CursorCPos = 0, g_CursorDPos = 0, g_GraphStop = 0;
+double g_PlotGridX = 0, g_PlotGridY = 0;
+double g_DefaultGridX = 64, g_DefaultGridY = 64;
 uint32_t g_GraphStart = 0; // Starting point/offset for the left side of the graph
+uint32_t g_GraphStop = 0;
 uint32_t g_GraphStart_old = 0;
 double g_GraphPixelsPerPoint = 1.f; // How many visual pixels are between each sample point (x axis)
 static bool flushAfterWrite = false;
@@ -165,6 +166,33 @@ int searchHomeFilePath(char **foundpath, const char *subdir, const char *filenam
     *foundpath = path;
 
     return PM3_SUCCESS;
+}
+
+void free_grabber(void) {
+    free(g_grabbed_output.ptr);
+    g_grabbed_output.ptr = NULL;
+    g_grabbed_output.size = 0;
+    g_grabbed_output.idx = 0;
+}
+
+static void fill_grabber(const char *string) {
+    if (g_grabbed_output.ptr == NULL || g_grabbed_output.size - g_grabbed_output.idx < MAX_PRINT_BUFFER) {
+        char *tmp = realloc(g_grabbed_output.ptr, g_grabbed_output.size + MAX_PRINT_BUFFER);
+        if (tmp == NULL) {
+            // We leave current g_grabbed_output untouched
+            PrintAndLogEx(ERR, "Out of memory error in fill_grabber()");
+            return;
+        }
+        g_grabbed_output.ptr = tmp;
+        g_grabbed_output.size += MAX_PRINT_BUFFER;
+    }
+    int len = snprintf(g_grabbed_output.ptr + g_grabbed_output.idx, MAX_PRINT_BUFFER, "%s", string);
+    if (len < 0 || len > MAX_PRINT_BUFFER) {
+        // We leave current g_grabbed_output_len untouched
+        PrintAndLogEx(ERR, "snprintf error in fill_grabber()");
+        return;
+    }
+    g_grabbed_output.idx += len;
 }
 
 void PrintAndLogOptions(const char *str[][2], size_t size, size_t space) {
@@ -298,12 +326,15 @@ void PrintAndLogEx(logLevel_t level, const char *fmt, ...) {
     } else {
         snprintf(buffer2, sizeof(buffer2), "%s%s", prefix, buffer);
         if (level == INPLACE) {
-            char buffer3[sizeof(buffer2)] = {0};
-            char buffer4[sizeof(buffer2)] = {0};
-            memcpy_filter_ansi(buffer3, buffer2, sizeof(buffer2), !g_session.supports_colors);
-            memcpy_filter_emoji(buffer4, buffer3, sizeof(buffer3), g_session.emoji_mode);
-            fprintf(stream, "\r%s", buffer4);
-            fflush(stream);
+            // ignore INPLACE if rest of output is grabbed
+            if (!(g_printAndLog & PRINTANDLOG_GRAB)) {
+                char buffer3[sizeof(buffer2)] = {0};
+                char buffer4[sizeof(buffer2)] = {0};
+                memcpy_filter_ansi(buffer3, buffer2, sizeof(buffer2), !g_session.supports_colors);
+                memcpy_filter_emoji(buffer4, buffer3, sizeof(buffer3), g_session.emoji_mode);
+                fprintf(stream, "\r%s", buffer4);
+                fflush(stream);
+            }
         } else {
             fPrintAndLog(stream, "%s", buffer2);
         }
@@ -400,17 +431,31 @@ static void fPrintAndLog(FILE *stream, const char *fmt, ...) {
     }
 #endif
 
-    if ((g_printAndLog & PRINTANDLOG_LOG) && logging && logfile) {
+    if (((g_printAndLog & PRINTANDLOG_LOG) && logging && logfile) ||
+            (g_printAndLog & PRINTANDLOG_GRAB)) {
         memcpy_filter_emoji(buffer3, buffer2, sizeof(buffer2), EMO_ALTTEXT);
-        if (filter_ansi) { // already done
+        if (filter_ansi == false) {
+            memcpy_filter_ansi(buffer, buffer3, sizeof(buffer3), true);
+        }
+    }
+    if ((g_printAndLog & PRINTANDLOG_LOG) && logging && logfile) {
+        if (filter_ansi) {
             fprintf(logfile, "%s", buffer3);
         } else {
-            memcpy_filter_ansi(buffer, buffer3, sizeof(buffer3), true);
             fprintf(logfile, "%s", buffer);
         }
         if (linefeed)
             fprintf(logfile, "\n");
         fflush(logfile);
+    }
+    if (g_printAndLog & PRINTANDLOG_GRAB) {
+        if (filter_ansi) {
+            fill_grabber(buffer3);
+        } else {
+            fill_grabber(buffer);
+        }
+        if (linefeed)
+            fill_grabber("\n");
     }
 
     if (flushAfterWrite)

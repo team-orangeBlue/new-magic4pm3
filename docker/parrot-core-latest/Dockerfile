@@ -1,18 +1,16 @@
 FROM parrotsec/core:latest
 
-ENV LANG C
-ENV DEBIAN_FRONTEND noninteractive
+ENV LANG=C
+ENV DEBIAN_FRONTEND=noninteractive
 # qtbase5-dev skipped
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get dist-upgrade -y && \
-    apt-get install -y --no-install-recommends git ca-certificates build-essential cmake pkg-config libreadline-dev gcc-arm-none-eabi libnewlib-dev libbz2-dev liblz4-dev libbluetooth-dev libpython3-dev libssl-dev sudo && \
+    apt-get install -y --no-install-recommends git ca-certificates build-essential cmake pkg-config libreadline-dev gcc-arm-none-eabi libnewlib-dev libbz2-dev liblz4-dev libbluetooth-dev libpython3-dev libssl-dev libgd-dev sudo && \
     apt-get clean
 
-RUN apt-get install -y python3-minimal && \
-    apt-get install -y python3-pip && \
-    apt-get clean && \
-    python3 -m pip install ansicolors sslcrypto
+RUN apt-get install -y python3-minimal python3-pip python3-venv && \
+    apt-get clean
 
 RUN apt-get install -y opencl-dev && \
     apt-get clean

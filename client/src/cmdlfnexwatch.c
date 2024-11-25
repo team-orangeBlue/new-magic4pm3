@@ -447,7 +447,7 @@ static int CmdNexWatchClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf nexwatch reader`") " to verify");
     return res;
 }
@@ -569,7 +569,7 @@ static command_t CommandTable[] = {
     {"help",   CmdHelp,           AlwaysAvailable, "This help"},
     {"demod",  CmdNexWatchDemod,  AlwaysAvailable, "demodulate a NexWatch tag (nexkey, quadrakey) from the GraphBuffer"},
     {"reader", CmdNexWatchReader, IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",  CmdNexWatchClone,  IfPm3Lf,         "clone NexWatch tag to T55x7"},
+    {"clone",  CmdNexWatchClone,  IfPm3Lf,         "clone NexWatch tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",    CmdNexWatchSim,    IfPm3Lf,         "simulate NexWatch tag"},
     {NULL, NULL, NULL, NULL}
 };

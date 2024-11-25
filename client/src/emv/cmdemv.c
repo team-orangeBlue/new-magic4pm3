@@ -292,7 +292,7 @@ static int emv_parse_track1(const uint8_t *d, size_t n, bool verbose) {
     // decoder
     char *tmp = str_ndup((const char *)d, n);
     uint8_t i = 0;
-    char delim[2] = "^";
+    const char delim[2] = "^";
     char *token = strtok(tmp, delim);
     while (token != NULL) {
 
@@ -1352,7 +1352,7 @@ static int CmdEMVExec(const char *Cmd) {
         arg_lit0("j",  "jload",    "Load transaction parameters from `emv_defparams.json` file"),
         arg_lit0(NULL, "force",    "Force search AID. Search AID instead of execute PPSE"),
         arg_rem("By default:",     "Transaction type - MSD"),
-        arg_lit0("v",  "qvsdc",    "Transaction type - qVSDC or M/Chip"),
+        arg_lit0(NULL, "qvsdc",    "Transaction type - qVSDC or M/Chip"),
         arg_lit0("c",  "qvsdccda", "Transaction type - qVSDC or M/Chip plus CDA (SDAD generation)"),
         arg_lit0("x",  "vsdc",     "Transaction type - VSDC. For test only. Not a standard behavior"),
         arg_lit0("g",  "acgpo",    "VISA. generate AC from GPO"),
@@ -2001,7 +2001,7 @@ static int CmdEMVScan(const char *Cmd) {
         arg_lit0("e",  "extract",  "Extract TLV elements and fill Application Data"),
         arg_lit0("j",  "jload",    "Load transaction parameters from `emv_defparams.json` file"),
         arg_rem("By default:",     "Transaction type - MSD"),
-        arg_lit0("v",  "qvsdc",    "Transaction type - qVSDC or M/Chip"),
+        arg_lit0(NULL,  "qvsdc",   "Transaction type - qVSDC or M/Chip"),
         arg_lit0("c",  "qvsdccda", "Transaction type - qVSDC or M/Chip plus CDA (SDAD generation)"),
         arg_lit0("x",  "vsdc",     "Transaction type - VSDC. For test only. Not a standard behavior"),
         arg_lit0("g",  "acgpo",    "VISA. generate AC from GPO"),
@@ -2040,9 +2040,9 @@ static int CmdEMVScan(const char *Cmd) {
 
     uint8_t psenum = (channel == CC_CONTACT) ? 1 : 2;
 
-    uint8_t filename[FILE_PATH_SIZE] = {0};
-    int filenamelen = sizeof(filename);
-    CLIGetStrWithReturn(ctx, 12, filename, &filenamelen);
+    char filename[FILE_PATH_SIZE] = {0};
+    int fnlen = 0;
+    CLIParamStrToBuf(arg_get_str(ctx, 12), (uint8_t *)filename, FILE_PATH_SIZE, &fnlen);
 
     CLIParserFree(ctx);
 

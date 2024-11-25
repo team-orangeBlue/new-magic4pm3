@@ -30,7 +30,7 @@ extern uint32_t _stack_start[], __bss_end__[];
 // BigBuf is the large multi-purpose buffer, typically used to hold A/D samples or traces.
 // Also used to hold various smaller buffers and the Mifare Emulator Memory.
 // We know that bss is aligned to 4 bytes.
-static uint8_t *BigBuf = (uint8_t *)__bss_end__;
+static uint8_t *const BigBuf = (uint8_t *)__bss_end__;
 
 /* BigBuf memory layout:
 Pointer to highest available memory: s_bigbuf_hi
@@ -308,8 +308,14 @@ bool LogTrace_ISO15693(const uint8_t *bytes, uint16_t len, uint32_t ts_start, ui
 
 // specific LogTrace function for bitstreams: the partial byte size is stored in first parity byte. E.g. bitstream "1100 00100010" -> partial byte: 4 bits
 bool RAMFUNC LogTraceBits(const uint8_t *btBytes, uint16_t bitLen, uint32_t timestamp_start, uint32_t timestamp_end, bool reader2tag) {
+
+    if (bitLen == 0) {
+        return false;
+    }
+
     uint8_t parity[(nbytes(bitLen) - 1) / 8 + 1];
     memset(parity, 0x00, sizeof(parity));
+    // parity has amount of leftover bits.
     parity[0] = bitLen % 8;
     return LogTrace(btBytes, nbytes(bitLen), timestamp_start, timestamp_end, parity, reader2tag);
 }

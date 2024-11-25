@@ -276,7 +276,7 @@ static int CmdGallagherClone(const char *Cmd) {
     } else {
         res = clone_t55xx_tag(blocks, ARRAYLEN(blocks));
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf gallagher reader`") " to verify");
     return res;
 }
@@ -380,7 +380,7 @@ static command_t CommandTable[] = {
     {"help",   CmdHelp,            AlwaysAvailable, "This help"},
     {"demod",  CmdGallagherDemod,  AlwaysAvailable, "demodulate an GALLAGHER tag from the GraphBuffer"},
     {"reader", CmdGallagherReader, IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",  CmdGallagherClone,  IfPm3Lf,         "clone GALLAGHER tag to T55x7"},
+    {"clone",  CmdGallagherClone,  IfPm3Lf,         "clone GALLAGHER tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",    CmdGallagherSim,    IfPm3Lf,         "simulate GALLAGHER tag"},
     {NULL, NULL, NULL, NULL}
 };

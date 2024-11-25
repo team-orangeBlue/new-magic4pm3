@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <libgen.h>        // basename
+#include <time.h>
 
 #include "pm3line.h"
 #include "usart_defs.h"
@@ -43,7 +44,7 @@
 #endif
 
 
-static int mainret = PM3_ESOFT;
+static int mainret = PM3_SUCCESS;
 
 #ifndef LIBPM3
 #define BANNERMSG1 ""
@@ -225,7 +226,6 @@ static void showBanner(void) {
     PrintAndLogEx(NORMAL, "");
     PrintAndLogEx(NORMAL, "  [ " _YELLOW_("%s!")" ]", get_quote());
     PrintAndLogEx(NORMAL, "     Patreon - https://www.patreon.com/iceman1001/");
-    PrintAndLogEx(NORMAL, "     Paypal  - https://www.paypal.me/iceman1001/");
     PrintAndLogEx(NORMAL, "");
 //    PrintAndLogEx(NORMAL, "   Monero");
 //    PrintAndLogEx(NORMAL, " 43mNJLpgBVaTvyZmX9ajcohpvVkaRy1kbZPm8tqAb7itZgfuYecgkRF36rXrKFUkwEGeZedPsASRxgv4HPBHvJwyJdyvQuP");
@@ -277,7 +277,7 @@ static void prompt_compose(char *buf, size_t buflen, const char *promptctx, cons
     if (no_newline) {
         snprintf(buf, buflen - 1, PROXPROMPT_COMPOSE, promptdev, promptnet, promptctx);
     } else {
-        snprintf(buf, buflen - 1, "\r                                         \r" PROXPROMPT_COMPOSE, promptdev, promptnet, promptctx);
+        snprintf(buf, buflen - 1, "\33[2K\r" PROXPROMPT_COMPOSE, promptdev, promptnet, promptctx);
     }
 }
 
@@ -384,7 +384,7 @@ void
 __attribute__((force_align_arg_pointer))
 #endif
 #endif
-main_loop(char *script_cmds_file, char *script_cmd, bool stayInCommandLoop) {
+main_loop(const char *script_cmds_file, char *script_cmd, bool stayInCommandLoop) {
 
     char *cmd = NULL;
     bool execCommand = (script_cmd != NULL);
@@ -552,7 +552,7 @@ check_script:
             if (cmd[0] != '\0') {
                 uint8_t old_printAndLog = g_printAndLog;
                 if (!printprompt) {
-                    g_printAndLog &= PRINTANDLOG_LOG;
+                    g_printAndLog &= ~PRINTANDLOG_PRINT;
                 }
                 char prompt[PROXPROMPT_MAX_SIZE] = {0};
                 prompt_compose(prompt, sizeof(prompt), prompt_ctx, prompt_dev, prompt_net, true);
@@ -776,31 +776,29 @@ static void show_help(bool showFullHelp, char *exec_name) {
 }
 
 static int dumpmem_to_file(const char *filename, uint32_t addr, uint32_t len, bool raw, bool in_bootloader) {
-    int res = PM3_EUNDEF;
 
     uint8_t *buffer = calloc(len, sizeof(uint8_t));
-    if (!buffer) {
+    if (buffer == NULL) {
         PrintAndLogEx(ERR, "error, cannot allocate memory ");
-        res = PM3_EMALLOC;
-        goto fail;
+        return PM3_EMALLOC;
     }
 
-    size_t read = 0;
+    int res = PM3_EUNDEF;
+    size_t readlen = 0;
     DeviceMemType_t type = raw ? MCU_MEM : MCU_FLASH;
     if (GetFromDevice(type, buffer, len, addr, NULL, 0, NULL, 1000, true)) {
         res = PM3_SUCCESS;
-        read = len; // GetFromDevice does not report the actual number of bytes received.
+        readlen = len; // GetFromDevice does not report the actual number of bytes received.
     }
 
     if (res == PM3_SUCCESS) {
-        if (saveFile(filename, ".bin", buffer, read) != 0) {
+        res = saveFile(filename, ".bin", buffer, readlen);
+        if (res != PM3_SUCCESS) {
             PrintAndLogEx(ERR, "error writing to file "_YELLOW_("%s"), filename);
-            res = PM3_EFILE;
         }
     }
 
     free(buffer);
-fail:
     return res;
 }
 
@@ -1440,7 +1438,7 @@ int main(int argc, char *argv[]) {
     MainGraphics();
 #  else
     // for *nix distro's,  check environment variable to verify a display
-    char *display = getenv("DISPLAY");
+    const char *display = getenv("DISPLAY");
     if (display && strlen(display) > 1) {
         InitGraphics(argc, argv, script_cmds_file, script_cmd, stayInCommandLoop);
         MainGraphics();
@@ -1458,8 +1456,13 @@ int main(int argc, char *argv[]) {
         CloseProxmark(g_session.current_device);
     }
 
-    if (g_session.window_changed) // Plot/Overlay moved or resized
+    // Plot/Overlay moved or resized
+    if (g_session.window_changed) {
         preferences_save();
+    }
+
+    free_grabber();
+
     return mainret;
 }
 #endif //LIBPM3

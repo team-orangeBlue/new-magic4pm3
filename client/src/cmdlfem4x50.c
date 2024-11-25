@@ -63,10 +63,10 @@ static void em4x50_print_result(const em4x50_word_t *words, int fwr, int lwr) {
                 s = _YELLOW_("control cfg ( locked )");
                 break;
             case EM4X50_DEVICE_SERIAL:
-                s = _YELLOW_("device serial number ( RO )");
+                s = _YELLOW_("serial number ( RO )");
                 break;
             case EM4X50_DEVICE_ID:
-                s = _YELLOW_("device identification ( RO )");
+                s = _YELLOW_("device id ( RO )");
                 break;
             default:
                 s = "user data";
@@ -340,7 +340,10 @@ static int CmdEM4x50Login(const char *Cmd) {
     clearCommandBuffer();
     PacketResponseNG resp;
     SendCommandNG(CMD_LF_EM4X50_LOGIN, (uint8_t *)&password, sizeof(password));
-    WaitForResponse(CMD_LF_EM4X50_LOGIN, &resp);
+    if (WaitForResponseTimeout(CMD_LF_EM4X50_LOGIN, &resp, 2000) == false) {
+        PrintAndLogEx(WARNING, "timeout while waiting for reply.");
+        return PM3_ETIMEOUT;
+    }
 
     // print response
     if (resp.status == PM3_SUCCESS)
@@ -377,8 +380,8 @@ static int CmdEM4x50Brute(const char *Cmd) {
     em4x50_data_t etd;
     memset(&etd, 0, sizeof(etd));
 
-    int mode_len = 64;
     char mode[64];
+    int mode_len = sizeof(mode) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated
     CLIGetStrWithReturn(ctx, 1, (uint8_t *) mode, &mode_len);
     PrintAndLogEx(INFO, "Chosen mode: %s", mode);
 
@@ -602,8 +605,11 @@ int read_em4x50_uid(void) {
     };
     em4x50_word_t words[EM4X50_NO_WORDS];
     int res = em4x50_read(&etd, words);
-    if (res == PM3_SUCCESS)
+    if (res == PM3_SUCCESS) {
         PrintAndLogEx(INFO, " Serial: " _GREEN_("%s"), sprint_hex(words[EM4X50_DEVICE_SERIAL].byte, 4));
+    } else {
+        SendCommandNG(CMD_BREAK_LOOP, NULL, 0);
+    }
     return res;
 }
 
@@ -612,7 +618,10 @@ int read_em4x50_uid(void) {
 //   read protected) -> selective read mode
 int em4x50_read(em4x50_data_t *etd, em4x50_word_t *out) {
 
-    em4x50_data_t edata = { .pwd_given = false, .addr_given = false };
+    em4x50_data_t edata = {
+        .pwd_given = false,
+        .addr_given = false,
+    };
 
     if (etd != NULL) {
         edata = *etd;
@@ -630,9 +639,8 @@ int em4x50_read(em4x50_data_t *etd, em4x50_word_t *out) {
         return PM3_ESOFT;
     }
 
-    uint8_t *data = resp.data.asBytes;
     em4x50_word_t words[EM4X50_NO_WORDS] = {0};
-    em4x50_prepare_result(data, etd->addresses & 0xFF, (etd->addresses >> 8) & 0xFF, words);
+    em4x50_prepare_result(resp.data.asBytes, etd->addresses & 0xFF, (etd->addresses >> 8) & 0xFF, words);
 
     if (out != NULL) {
         memcpy(out, &words, sizeof(em4x50_word_t) * EM4X50_NO_WORDS);
@@ -967,7 +975,7 @@ static int CmdEM4x50Write(const char *Cmd) {
     em4x50_prepare_result(data, addr, addr, words);
     em4x50_print_result(words, addr, addr);
     PrintAndLogEx(SUCCESS, "Write ( " _GREEN_("ok") " )");
-    PrintAndLogEx(HINT, "Try `" _YELLOW_("lf em 4x50 rdbl -a %u") "` - to read your data", addr);
+    PrintAndLogEx(HINT, "Try `" _YELLOW_("lf em 4x50 rdbl -b %u") "` - to read your data", addr);
     PrintAndLogEx(INFO, "Done!");
     return PM3_SUCCESS;
 }
@@ -1252,18 +1260,9 @@ static int CmdEM4x50Sim(const char *Cmd) {
 
     PrintAndLogEx(INFO, "Press " _GREEN_("pm3 button") " or " _GREEN_("<Enter>") " to abort simulation");
 
-    PacketResponseNG resp;
     // init to ZERO
-    resp.cmd = 0,
-    resp.length = 0,
-    resp.magic = 0,
-    resp.status = 0,
-    resp.crc = 0,
-    resp.ng = false,
-    resp.oldarg[0] = 0;
-    resp.oldarg[1] = 0;
-    resp.oldarg[2] = 0;
-    memset(resp.data.asBytes, 0, PM3_CMD_DATA_SIZE);
+    PacketResponseNG resp;
+    memset(&resp, 0, sizeof(resp));
 
     bool keypress;
     do {
@@ -1331,7 +1330,7 @@ static command_t CommandTable[] = {
     {"help",   CmdHelp,              AlwaysAvailable, "This help"},
     {"-----------", CmdHelp,         AlwaysAvailable, "--------------------- " _CYAN_("operations") " ---------------------"},
     {"brute",   CmdEM4x50Brute,      IfPm3EM4x50,     "Bruteforce attack to find password"},
-    {"chk",     CmdEM4x50Chk,        IfPm3EM4x50,     "Check passwords from dictionary"},
+    {"chk",     CmdEM4x50Chk,        IfPm3EM4x50,     "Check passwords"},
     {"dump",    CmdEM4x50Dump,       IfPm3EM4x50,     "Dump EM4x50 tag"},
     {"info",    CmdEM4x50Info,       IfPm3EM4x50,     "Tag information"},
     {"login",   CmdEM4x50Login,      IfPm3EM4x50,     "Login into EM4x50 tag"},

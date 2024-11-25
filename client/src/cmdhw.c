@@ -22,6 +22,10 @@
 #include <string.h>
 #include <ctype.h>
 
+#ifdef HAVE_PYTHON
+#include <Python.h>
+#endif
+
 #include "cmdparser.h"      // command_t
 #include "cliparser.h"
 #include "comms.h"
@@ -40,6 +44,8 @@
 #include "flash.h"          // reboot to bootloader mode
 #include "proxgui.h"
 #include "graph.h"          // for graph data
+
+#include "lua.h"
 
 static int CmdHelp(const char *Cmd);
 
@@ -1085,8 +1091,8 @@ static int CmdTune(const char *Cmd) {
                       , LF_DIV2FREQ(LF_DIVISOR_134)
                      );
         g_GraphTraceLen = 256;
-        g_CursorCPos = LF_DIVISOR_125;
-        g_CursorDPos = LF_DIVISOR_134;
+        g_MarkerC.pos = LF_DIVISOR_125;
+        g_MarkerD.pos = LF_DIVISOR_134;
         ShowGraphWindow();
         RepaintGraphWindow();
     } else {
@@ -1358,8 +1364,8 @@ static int CmdConnect(const char *Cmd) {
     };
     CLIExecWithReturn(ctx, Cmd, argtable, true);
 
-    int p_len = FILE_PATH_SIZE;
     char port[FILE_PATH_SIZE] = {0};
+    int p_len = sizeof(port) - 1; // CLIGetStrWithReturn does not guarantee string to be null-terminated;
     CLIGetStrWithReturn(ctx, 1, (uint8_t *)port, &p_len);
     uint32_t baudrate = arg_get_u32_def(ctx, 2, USART_BAUD_RATE);
     CLIParserFree(ctx);
@@ -1432,7 +1438,7 @@ static int CmdBootloader(const char *Cmd) {
 }
 
 int set_fpga_mode(uint8_t mode) {
-    if (mode < FPGA_BITSTREAM_LF || mode > FPGA_BITSTREAM_HF_15) {
+    if (mode < FPGA_BITSTREAM_MIN || mode > FPGA_BITSTREAM_MAX) {
         return PM3_EINVARG;
     }
     uint8_t d[] = {mode};
@@ -1440,7 +1446,7 @@ int set_fpga_mode(uint8_t mode) {
     SendCommandNG(CMD_SET_FPGAMODE, d, sizeof(d));
     PacketResponseNG resp;
     if (WaitForResponseTimeout(CMD_SET_FPGAMODE, &resp, 1000) == false) {
-        PrintAndLogEx(WARNING, "command execution timeout");
+        PrintAndLogEx(WARNING, "command execution time out");
         return PM3_ETIMEOUT;
     }
     if (resp.status != PM3_SUCCESS) {
@@ -1468,12 +1474,12 @@ static command_t CommandTable[] = {
     {"ping",          CmdPing,         IfPm3Present,     "Test if the Proxmark3 is responsive"},
     {"readmem",       CmdReadmem,      IfPm3Present,     "Read from MCU flash"},
     {"reset",         CmdReset,        IfPm3Present,     "Reset the device"},
-    {"setlfdivisor",  CmdSetDivisor,   IfPm3Present,     "Drive LF antenna at 12MHz / (divisor + 1)"},
-    {"sethfthresh",   CmdSetHFThreshold, IfPm3Present,   "Set thresholds in HF/14a mode"},
+    {"setlfdivisor",  CmdSetDivisor,   IfPm3Lf,          "Drive LF antenna at 12MHz / (divisor + 1)"},
+    {"sethfthresh",   CmdSetHFThreshold, IfPm3Iso14443a, "Set thresholds in HF/14a mode"},
     {"setmux",        CmdSetMux,       IfPm3Present,     "Set the ADC mux to a specific value"},
     {"standalone",    CmdStandalone,   IfPm3Present,     "Start installed standalone mode on device"},
     {"tia",           CmdTia,          IfPm3Present,     "Trigger a Timing Interval Acquisition to re-adjust the RealTimeCounter divider"},
-    {"tune",          CmdTune,         IfPm3Present,     "Measure tuning of device antenna"},
+    {"tune",          CmdTune,         IfPm3Lf,          "Measure tuning of device antenna"},
     {NULL, NULL, NULL, NULL}
 };
 
@@ -1667,19 +1673,20 @@ void pm3_version(bool verbose, bool oneliner) {
     PrintAndLogEx(NORMAL, "  native BT support......... " _YELLOW_("absent"));
 #endif
 #ifdef HAVE_PYTHON
-    PrintAndLogEx(NORMAL, "  Python script support..... " _GREEN_("present"));
+    PrintAndLogEx(NORMAL, "  Python script support..... " _GREEN_("present") " ( " _YELLOW_(PY_VERSION) " )");
 #else
     PrintAndLogEx(NORMAL, "  Python script support..... " _YELLOW_("absent"));
-#endif
-#ifdef HAVE_LUA_SWIG
-    PrintAndLogEx(NORMAL, "  Lua SWIG support.......... " _GREEN_("present"));
-#else
-    PrintAndLogEx(NORMAL, "  Lua SWIG support.......... " _YELLOW_("absent"));
 #endif
 #ifdef HAVE_PYTHON_SWIG
     PrintAndLogEx(NORMAL, "  Python SWIG support....... " _GREEN_("present"));
 #else
     PrintAndLogEx(NORMAL, "  Python SWIG support....... " _YELLOW_("absent"));
+#endif
+    PrintAndLogEx(NORMAL, "  Lua script support........ " _GREEN_("present") " ( " _YELLOW_("%s.%s.%s") " )", LUA_VERSION_MAJOR, LUA_VERSION_MINOR, LUA_VERSION_RELEASE);
+#ifdef HAVE_LUA_SWIG
+    PrintAndLogEx(NORMAL, "  Lua SWIG support.......... " _GREEN_("present"));
+#else
+    PrintAndLogEx(NORMAL, "  Lua SWIG support.......... " _YELLOW_("absent"));
 #endif
 
     if (g_session.pm3_present) {

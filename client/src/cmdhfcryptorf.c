@@ -80,7 +80,7 @@ static int CmdHFCryptoRFSim(const char *Cmd) {
 static int CmdHFCryptoRFSniff(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf cryptorf sniff",
-                  "Sniff the communication reader and tag",
+                  "Sniff the communication between reader and tag",
                   "hf cryptorf sniff\n"
                  );
 
@@ -93,6 +93,8 @@ static int CmdHFCryptoRFSniff(const char *Cmd) {
 
     clearCommandBuffer();
     SendCommandNG(CMD_HF_ISO14443B_SNIFF, NULL, 0);
+    PacketResponseNG resp;
+    WaitForResponse(CMD_HF_ISO14443B_SNIFF, &resp);
 
     PrintAndLogEx(HINT, "Try `" _YELLOW_("hf cryptorf list") "` to view captured tracelog");
     PrintAndLogEx(HINT, "Try `" _YELLOW_("trace save -f hf_cryptorf_mytrace") "` to save tracelog for later analysing");
@@ -124,7 +126,7 @@ static bool get_14b_UID(iso14b_card_select_t *card) {
     } // retry
 
     if (retry <= 0) {
-        PrintAndLogEx(FAILED, "command execution timeout");
+        PrintAndLogEx(FAILED, "command execution time out");
     }
 
     return false;
@@ -143,7 +145,7 @@ static int infoHFCryptoRF(bool verbose) {
     PacketResponseNG resp;
     if (WaitForResponseTimeout(CMD_HF_ISO14443B_COMMAND, &resp, TIMEOUT) == false) {
         if (verbose) {
-            PrintAndLogEx(WARNING, "command execution timeout");
+            PrintAndLogEx(WARNING, "command execution time out");
         }
         switch_off_field_cryptorf();
         return false;

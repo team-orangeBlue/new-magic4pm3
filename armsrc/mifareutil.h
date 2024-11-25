@@ -68,13 +68,14 @@
 #endif
 
 //functions
-uint16_t mifare_sendcmd(uint8_t cmd, uint8_t *data, uint8_t data_size, uint8_t *answer, uint8_t *answer_parity, uint32_t *timing);
-uint16_t mifare_sendcmd_short(struct Crypto1State *pcs, uint8_t crypted, uint8_t cmd, uint8_t data, uint8_t *answer, uint8_t *answer_parity, uint32_t *timing);
+uint16_t mifare_sendcmd(uint8_t cmd, uint8_t *data, uint8_t data_size, uint8_t *answer, uint16_t answer_len, uint8_t *answer_parity, uint32_t *timing);
+uint16_t mifare_sendcmd_short(struct Crypto1State *pcs, uint8_t crypted, uint8_t cmd, uint8_t data,
+                              uint8_t *answer, uint16_t answer_len, uint8_t *answer_parity, uint32_t *timing);
 
 // mifare classic
 int mifare_classic_auth(struct Crypto1State *pcs, uint32_t uid, uint8_t blockNo, uint8_t keyType, uint64_t ui64Key, uint8_t isNested);
 int mifare_classic_authex(struct Crypto1State *pcs, uint32_t uid, uint8_t blockNo, uint8_t keyType, uint64_t ui64Key, uint8_t isNested, uint32_t *ntptr, uint32_t *timing);
-int mifare_classic_authex_cmd(struct Crypto1State *pcs, uint32_t uid, uint8_t blockNo, uint8_t cmd, uint64_t ui64Key, uint8_t isNested, uint32_t *ntptr, uint32_t *ntencptr, uint32_t *timing);
+int mifare_classic_authex_cmd(struct Crypto1State *pcs, uint32_t uid, uint8_t blockNo, uint8_t cmd, uint64_t ui64Key, uint8_t isNested, uint32_t *ntptr, uint32_t *ntencptr, uint8_t *ntencparptr, uint32_t *timing, bool corruptnrar, bool corruptnrarparity);
 
 int mifare_classic_readblock(struct Crypto1State *pcs, uint8_t blockNo, uint8_t *blockData);
 int mifare_classic_readblock_ex(struct Crypto1State *pcs, uint8_t blockNo, uint8_t *blockData, uint8_t iso_byte);
@@ -94,8 +95,8 @@ int mifare_ultra_writeblock(uint8_t blockNo, uint8_t *blockData);
 int mifare_ultra_halt(void);
 
 // desfire
-int mifare_sendcmd_special(struct Crypto1State *pcs, uint8_t crypted, uint8_t cmd, uint8_t *data, uint8_t *answer, uint8_t *answer_parity, uint32_t *timing);
-int mifare_sendcmd_special2(struct Crypto1State *pcs, uint8_t crypted, uint8_t cmd, uint8_t *data, uint8_t *answer, uint8_t *answer_parity, uint32_t *timing);
+int mifare_sendcmd_special(struct Crypto1State *pcs, uint8_t crypted, uint8_t cmd, uint8_t *data, uint8_t *answer, uint16_t answer_len, uint8_t *answer_parity, uint32_t *timing);
+int mifare_sendcmd_special2(struct Crypto1State *pcs, uint8_t crypted, uint8_t cmd, uint8_t *data, uint8_t *answer, uint16_t answer_len, uint8_t *answer_parity, uint32_t *timing);
 int mifare_desfire_des_auth1(uint32_t uid, uint8_t *blockData);
 int mifare_desfire_des_auth2(uint32_t uid, uint8_t *key, uint8_t *blockData);
 
@@ -122,5 +123,10 @@ uint64_t emlGetKey(int sectorNum, int keyType);
 int emlGetValBl(uint32_t *blReg, uint8_t *blBlock, int blockNum);
 void emlSetValBl(uint32_t blReg, uint8_t blBlock, int blockNum);
 bool emlCheckValBl(int blockNum);
-
+bool validate_prng_nonce(uint32_t nonce);
+bool validate_parity_nonce(uint32_t ntenc, uint8_t ntparenc, uint32_t nt);
+int nonce_distance(uint32_t from, uint32_t to);
+int nonce16_distance(uint16_t x, uint16_t y);
+int nonce16_index(uint16_t nt);
+uint32_t rewind_nonce(uint32_t from, uint16_t dist);
 #endif

@@ -472,7 +472,7 @@ static int CmdLFNedapClone(const char *Cmd) {
     } else {
         PrintAndLogEx(NORMAL, "");
     }
-    PrintAndLogEx(SUCCESS, "Done");
+    PrintAndLogEx(SUCCESS, "Done!");
     PrintAndLogEx(HINT, "Hint: try " _YELLOW_("`lf nedap reader`") " to verify");
     return res;
 }
@@ -530,7 +530,7 @@ static int CmdLFNedapSim(const char *Cmd) {
     uint8_t data[16];
     NedapGen(sub_type, customer_code, id, is_long, data);
 
-    uint8_t bs[16 * 8];
+    uint8_t bs[16 * 8] = {0};
     for (uint8_t i = 0; i < max; i++) {
         num_to_bytebits(data[i], 8, bs + i * 8);
     }
@@ -563,7 +563,7 @@ static command_t CommandTable[] = {
     {"help",   CmdHelp,          AlwaysAvailable, "This help"},
     {"demod",  CmdLFNedapDemod,  AlwaysAvailable, "demodulate Nedap tag from the GraphBuffer"},
     {"reader", CmdLFNedapReader, IfPm3Lf,         "attempt to read and extract tag data"},
-    {"clone",  CmdLFNedapClone,  IfPm3Lf,         "clone Nedap tag to T55x7 or Q5/T5555"},
+    {"clone",  CmdLFNedapClone,  IfPm3Lf,         "clone Nedap tag to T55x7, Q5/T5555 or EM4305/4469"},
     {"sim",    CmdLFNedapSim,    IfPm3Lf,         "simulate Nedap tag"},
     {NULL, NULL, NULL, NULL}
 };
