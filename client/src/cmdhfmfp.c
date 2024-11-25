@@ -495,7 +495,7 @@ static int CmdFudanCharge(const char *Cmd) {
     CLIParserContext *ctx;
     CLIParserInit(&ctx, "hf mfp charge",
                   "Executes entry decrement on FMCOS chip with access control app. VOS use only.\n",
-                  "You should NEVER have to use this, as the counter must always go up!\n",
+                  "You should NEVER have to use this, as the counter must always go up!\n"
                   "hf mfp charge\n"
                  );
 
