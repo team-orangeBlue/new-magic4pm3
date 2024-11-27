@@ -123,3 +123,4 @@ _codeql*
 
 # Pyton venvs
 venv/
+.idea/
