@@ -300,7 +300,7 @@ int FudanPrepare(uint8_t* uid){
     uint8_t cmdmakeapp[20] = {0x80, 0xe0, 0, 1, 15, 0x38, 0x4, 0x00, 0xf0, 0xf0, 0x81, 0xff, 0xff, 0x48, 0x4F, 0x4D, 0x45, 0x41, 0x50, 0x50}; // Step 2: Make the new application
     uint8_t cmdsel[12]={0, 0xa4, 4, 0, 7, 0x48, 0x4F, 0x4D, 0x45, 0x41, 0x50, 0x50}; // We'll make use of this a lot
     uint8_t cmdmakekey[12]={0x80, 0xE0, 0xFF, 0xFE, 0x07, 0x3F, 0x00, 0xB0, 0x81, 0xF0, 0xFF, 0xFF}; // Keyfile
-    uint8_t cmdmakebin[12]={0x80, 0xE0, 0, 4, 0x07, 0x68, 0, 8, 0xF2, 0xF3, 0xFF, 0x7F}; // Config file
+    //uint8_t cmdmakebin[12]={0x80, 0xE0, 0, 4, 0x07, 0x68, 0, 8, 0xF2, 0xF3, 0xFF, 0x7F}; // Config file
     uint8_t cmdmakerec[12]={0x80, 0xE0, 0, 3, 0x07, 0x2e, 0x0a, 23, 0xF2, 0xEF, 0xFF, 0x74}; // Records file
     // For charging
     FudanKDF(uid, 0x023e, keybuffer);
@@ -351,11 +351,11 @@ int FudanPrepare(uint8_t* uid){
     ExchangeRAW14a(cmdwritekey36, sizeof(cmdwritekey36), false, true, buffer, 250, &garbage, false);
     // PIN because it's needed. More security is more security!
     ExchangeRAW14a(cmdwritekey3A, sizeof(cmdwritekey3A), false, true, buffer, 250, &garbage, false);
-    ExchangeRAW14a(cmdmakebin, sizeof(cmdmakebin), false, true, buffer, 250, &garbage, false); // make the binary file with the unlimited date, free uses and config
+    //ExchangeRAW14a(cmdmakebin, sizeof(cmdmakebin), false, true, buffer, 250, &garbage, false); // make the binary file with the unlimited date, free uses and config
     ExchangeRAW14a(cmdmakerec, sizeof(cmdmakerec), false, true, buffer, 250, &garbage, false); // and the records file. Needed for logging
     // Step 5: make the wallet and call it a day
     uint8_t cmdmakewallet[12] = {0x80, 0xe0, 0, 1, 7, 0x2f, 0x02, 0x08, 0xf0, 0, 0xff, 0x03};
-    ExchangeRAW14a(cmdmakewallet, sizeof(cmdmakewallet), false, false, buffer, 250, &garbage, false);
+    if (ExchangeRAW14a(cmdmakewallet, sizeof(cmdmakewallet), false, false, buffer, 1000, &garbage, false)){PrintAndLogEx(WARNING, "Is this an FM1216-137? Run this to finish creation - you must do this.\nhf 14a apdu -skd 00A40000020001; hf 14a apdu -d 80E00001072F0208F000FF03");}
     return 0;
 }
 
